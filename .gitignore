@@ -1,0 +1,45 @@
+# ===== 秘密情報・認証情報（絶対にcommitしない） =====
+.env
+.env.local
+.env.production
+data/google_token.json
+data/google_credentials.json
+data/*.json
+
+# ===== データベース（個人情報含む可能性） =====
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ===== ログ =====
+logs/
+*.log
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ===== その他 =====
+*.tmp
+*.bak
