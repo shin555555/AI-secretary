@@ -32,4 +32,19 @@
 
 ---
 
+### Claudeルール設定（ai-behavior.md）
+- 回答スタイル: 簡潔重視（コード中心）
+- 自律度: 基本お任せ（requirements.mdに沿って進め、問題時のみ報告）
+- コード: 変数・関数名は英語、コメントは日本語
+- セキュリティ: 全項目最高レベル（PII・外部API・.env管理）
+
+### GitHub リポジトリ
+- URL: https://github.com/shin555555/AI-secretary.git
+- ブランチ: master
+- 除外設定: .env, data/, *.db を .gitignore で除外
+
+### プロジェクト現在地（2026-03-17）
+- 実装コードはまだ0行
+- 次のアクション: Phase 0 環境構築（docs/setup.md 参照）
+
 _（開発中に新しい決定が生じたらここに追記）_

@@ -8,6 +8,8 @@
 |---------|------|-----------|
 | ✅ 要件定義 | requirements.md 作成 | 完了 |
 | ✅ Claudeルール | .claude/rules/ 作成 | 完了 |
+| ✅ ドキュメント整備 | docs/ 作成（progress/setup/testing/decisions/onboarding） | 完了 |
+| ✅ Git/GitHub | .gitignore・.env.example 作成、GitHubにpush | 完了 |
 | ⬜ Phase 0 | 環境構築 | 未着手 |
 | ⬜ Phase 1 | LINE Echo Bot | 未着手 |
 | ⬜ Phase 2 | LLM統合（凛ペルソナ） | 未着手 |
