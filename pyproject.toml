@@ -1,0 +1,16 @@
+[project]
+name = "ai-secretary"
+version = "0.1.0"
+description = "AI秘書「凛」- 就労継続支援B型事業所向けLINE Bot"
+requires-python = ">=3.11"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -10,7 +10,7 @@
 | ✅ Claudeルール | .claude/rules/ 作成 | 完了 |
 | ✅ ドキュメント整備 | docs/ 作成（progress/setup/testing/decisions/onboarding） | 完了 |
 | ✅ Git/GitHub | .gitignore・.env.example 作成、GitHubにpush | 完了 |
-| ⬜ Phase 0 | 環境構築 | 未着手 |
+| 🔄 Phase 0 | 環境構築 | 進行中 |
 | ⬜ Phase 1 | LINE Echo Bot | 未着手 |
 | ⬜ Phase 2 | LLM統合（凛ペルソナ） | 未着手 |
 | ⬜ Phase 3 | Googleカレンダー連携 | 未着手 |
@@ -20,21 +20,21 @@
 
 ## Phase 0 チェックリスト（環境構築）
 
-- [ ] Python 3.11+ インストール確認
+- [x] Python 3.11+ インストール確認（Python 3.12.8）
 - [ ] Ollama インストール + モデルpull（gemma2:9b または qwen2.5:14b）
-- [ ] LINE公式アカウント作成（Messaging API チャネル）
+- [x] LINE公式アカウント作成（Messaging API チャネル @042ndwhq）
 - [ ] Google Cloud プロジェクト作成 + Calendar API 有効化
 - [ ] Google OAuth2 認証情報作成
 - [ ] Cloudflare Tunnel インストール（cloudflared）
-- [ ] Python仮想環境作成 + 依存関係インストール
-- [ ] .env ファイル作成（.env.example から）
+- [x] Python仮想環境作成 + 依存関係インストール（.venv/）
+- [x] .env ファイル作成（LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN, LINE_USER_ID 設定済み）
 
 ## Phase 1 チェックリスト（LINE Echo Bot）
 
-- [ ] FastAPI 骨格作成（main.py, health.py）
-- [ ] LINE Webhook エンドポイント（line_webhook.py）
-- [ ] LINE 署名検証（HMAC-SHA256）
-- [ ] エコーボット動作確認
+- [x] FastAPI 骨格作成（main.py, health.py）
+- [x] LINE Webhook エンドポイント（line_webhook.py）
+- [x] LINE 署名検証（HMAC-SHA256）
+- [ ] エコーボット動作確認（Cloudflare Tunnel待ち）
 - [ ] Cloudflare Tunnel 疎通確認
 - [ ] LINE から送信 → エコー返信 確認
 
@@ -85,6 +85,9 @@
 ### 2026-03-18
 - requirements.md に繰り返しタスク（ルーティン）・繰り返しカレンダー予定（RRULE）機能を追加
 - decisions.md に設計決定を記録
-- 実装コードはまだ0行。次のアクション: Phase 0 環境構築
+- Phase 0 実装開始：pyproject.toml, requirements.txt, ディレクトリ構成, config/, app/ 作成
+- FastAPI + LINE Webhook コード実装済み（エコーボット）
+- LINE公式アカウント作成完了（@042ndwhq）、.env に3項目設定済み
+- 残り: Ollama・Cloudflare Tunnel インストール、Google Cloud セットアップ
 
 _（開発中に発生した問題・決定事項をここに記録）_
