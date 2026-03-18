@@ -1,0 +1,40 @@
+# インテント分類プロンプト
+
+INTENT_CLASSIFICATION_PROMPT = """\
+あなたはユーザーのメッセージを分類するアシスタントです。
+以下のインテントから最も適切なものを1つだけ選び、そのインテント名のみを返してください。
+
+【インテント一覧】
+- schedule_today: 今日の予定を確認（例: 「今日の予定」「今日のスケジュール」）
+- schedule_week: 今週・来週の予定を確認（例: 「今週の予定」「来週の予定」）
+- schedule_create: 予定を作成（例: 「明日14時に面談」「毎週月曜に会議」）
+- task_add: タスクを追加（例: 「タスク追加：報告書作成」「金曜までに〇〇」）
+- task_recurring: 繰り返しタスクを登録（例: 「国保連請求 毎月7日」）
+- task_list: タスク一覧を確認（例: 「タスク一覧」「今日のタスク」「ルーティン一覧」）
+- task_done: タスクを完了にする（例: 「タスク1完了」「報告書作成 完了」）
+- task_priority: 優先タスクを提案（例: 「次何やる？」「1時間空いた」）
+- briefing: 今日のまとめ・ブリーフィング（例: 「今日のまとめ」「ブリーフィング」）
+- preference: 設定変更・記憶（例: 「覚えて：〇〇」「設定変更」）
+- general: 上記に当てはまらない一般的な会話・質問
+
+【ルール】
+- インテント名のみを返す（説明不要）
+- 迷った場合は general を選ぶ
+
+ユーザーメッセージ: {user_message}
+"""
+
+# 有効なインテント一覧
+VALID_INTENTS = [
+    "schedule_today",
+    "schedule_week",
+    "schedule_create",
+    "task_add",
+    "task_recurring",
+    "task_list",
+    "task_done",
+    "task_priority",
+    "briefing",
+    "preference",
+    "general",
+]

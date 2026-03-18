@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from app.api.health import router as health_router
 from app.api.line_webhook import router as line_router
+from app.models.base import init_db
 from config.logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging()
+    init_db()
     logger.info("凛（AI秘書）を起動しました")
     yield
     logger.info("凛（AI秘書）を停止しました")

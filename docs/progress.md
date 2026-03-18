@@ -10,9 +10,9 @@
 | ✅ Claudeルール | .claude/rules/ 作成 | 完了 |
 | ✅ ドキュメント整備 | docs/ 作成（progress/setup/testing/decisions/onboarding） | 完了 |
 | ✅ Git/GitHub | .gitignore・.env.example 作成、GitHubにpush | 完了 |
-| 🔄 Phase 0 | 環境構築 | 進行中 |
-| ⬜ Phase 1 | LINE Echo Bot | 未着手 |
-| ⬜ Phase 2 | LLM統合（凛ペルソナ） | 未着手 |
+| 🔄 Phase 0 | 環境構築 | 進行中（残: Google Cloud） |
+| ✅ Phase 1 | LINE Echo Bot | 完了 |
+| ✅ Phase 2 | LLM統合（凛ペルソナ） | 完了 |
 | ⬜ Phase 3 | Googleカレンダー連携 | 未着手 |
 | ⬜ Phase 4 | タスク管理 + リマインド | 未着手 |
 | ⬜ Phase 5 | パーソナライズ | 未着手 |
@@ -21,11 +21,11 @@
 ## Phase 0 チェックリスト（環境構築）
 
 - [x] Python 3.11+ インストール確認（Python 3.12.8）
-- [ ] Ollama インストール + モデルpull（gemma2:9b または qwen2.5:14b）
+- [x] Ollama インストール + モデルpull（gemma2:9b-instruct-q5_K_M, v0.18.0）
 - [x] LINE公式アカウント作成（Messaging API チャネル @042ndwhq）
 - [ ] Google Cloud プロジェクト作成 + Calendar API 有効化
 - [ ] Google OAuth2 認証情報作成
-- [ ] Cloudflare Tunnel インストール（cloudflared）
+- [x] Cloudflare Tunnel インストール（cloudflared 2025.8.1）
 - [x] Python仮想環境作成 + 依存関係インストール（.venv/）
 - [x] .env ファイル作成（LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN, LINE_USER_ID 設定済み）
 
@@ -34,19 +34,19 @@
 - [x] FastAPI 骨格作成（main.py, health.py）
 - [x] LINE Webhook エンドポイント（line_webhook.py）
 - [x] LINE 署名検証（HMAC-SHA256）
-- [ ] エコーボット動作確認（Cloudflare Tunnel待ち）
-- [ ] Cloudflare Tunnel 疎通確認
-- [ ] LINE から送信 → エコー返信 確認
+- [x] エコーボット動作確認
+- [x] Cloudflare Tunnel 疎通確認（Quick Tunnel）
+- [x] LINE から送信 → エコー返信 確認（2026-03-18）
 
 ## Phase 2 チェックリスト（LLM統合）
 
-- [ ] llm_service.py（Ollama バックエンド）
-- [ ] 凛のシステムプロンプト（system_prompt.py）
-- [ ] インテント分類（intent_classifier.py）
-- [ ] 会話履歴保存（conversations テーブル）
-- [ ] Gemini フォールバック
-- [ ] pii_filter.py 実装
-- [ ] LINE で自然な会話ができる
+- [x] llm_service.py（Ollama バックエンド）
+- [x] 凛のシステムプロンプト（system_prompt.py）
+- [x] インテント分類（intent_classifier.py）
+- [x] 会話履歴保存（conversations テーブル + memory_service.py）
+- [x] Gemini フォールバック
+- [x] pii_filter.py 実装
+- [x] LINE で自然な会話ができる（2026-03-18 確認済み）
 
 ## Phase 3 チェックリスト（カレンダー）
 
@@ -57,7 +57,7 @@
 
 ## Phase 4 チェックリスト（タスク管理）
 
-- [ ] SQLCipher DB セットアップ（base.py）
+- [x] SQLite DB セットアップ（base.py）※標準SQLite版、SQLCipher化はPhase 6で検討
 - [ ] Task モデル・スキーマ
 - [ ] task_service.py（CRUD + 優先度）
 - [ ] 自然言語タスク解析
@@ -66,10 +66,10 @@
 
 ## Phase 5 チェックリスト（パーソナライズ）
 
-- [ ] memory_service.py
+- [x] memory_service.py（Phase 2で先行実装済み）
 - [ ] preference テーブル・CRUD
 - [ ] interaction_log テーブル
-- [ ] コンテキスト記憶（直近10ターン）
+- [x] コンテキスト記憶（直近10ターン）（Phase 2で先行実装済み）
 
 ## Phase 6 チェックリスト（安定化）
 
@@ -88,6 +88,11 @@
 - Phase 0 実装開始：pyproject.toml, requirements.txt, ディレクトリ構成, config/, app/ 作成
 - FastAPI + LINE Webhook コード実装済み（エコーボット）
 - LINE公式アカウント作成完了（@042ndwhq）、.env に3項目設定済み
-- 残り: Ollama・Cloudflare Tunnel インストール、Google Cloud セットアップ
+- cloudflared インストール完了（v2025.8.1）、Quick Tunnel で疎通確認成功
+- **Phase 1 完了**: LINE → エコーボット → 返信 の全フロー動作確認済み
+- Ollama 0.18.0 + gemma2:9b-instruct-q5_K_M インストール完了（32GB RAM）
+- **Phase 2 完了**: llm_service / secretary / pii_filter / memory_service / intent_classifier 実装
+- LINE で凛（りん）として自然な会話応答を確認
+- 残り: Google Cloud セットアップ（Phase 3 で実施）
 
 _（開発中に発生した問題・決定事項をここに記録）_

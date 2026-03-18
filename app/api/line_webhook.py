@@ -13,6 +13,7 @@ from linebot.v3.webhook import WebhookParser
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
 from config.settings import settings
+from app.services.secretary import secretary
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +52,12 @@ async def line_webhook(
         user_message = event.message.text
         logger.info(f"受信: {user_message[:50]}")
 
-        # Phase 1: エコーボット（後のPhaseでsecretary.pyに置き換え）
-        reply_text = f"（エコー）{user_message}"
+        # Phase 2: 凛（AI秘書）が応答を生成
+        try:
+            reply_text = await secretary.handle_message(user_message)
+        except Exception as e:
+            logger.error(f"応答生成エラー: {e}")
+            reply_text = "申し訳ございません、処理中にエラーが発生しました。もう一度お試しください。"
 
         with ApiClient(configuration) as api_client:
             messaging_api = MessagingApi(api_client)
