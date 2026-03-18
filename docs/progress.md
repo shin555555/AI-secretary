@@ -59,7 +59,7 @@
 
 ## Phase 4 チェックリスト（タスク管理）
 
-- [x] SQLite DB セットアップ（base.py）※標準SQLite版、SQLCipher化はPhase 6で検討
+- [x] SQLite DB セットアップ（base.py）→ SQLCipher暗号化済み
 - [x] Task・RecurringTask モデル（app/models/task.py）
 - [x] task_service.py（CRUD + 優先度 + 削除 + 繰り返しタスク）
 - [x] task_parser.py（コードベース日付解決）
@@ -81,6 +81,7 @@
 - [x] ログローテーション設定（RotatingFileHandler: 5MB x 3ファイル）
 - [x] start_server.bat / stop_server.bat（英語版、エンコーディング問題対応済み）
 - [x] Quick Tunnel + LINE Webhook URL自動更新（scripts/start_tunnel.py）
+- [x] SQLCipher暗号化DB導入（AES-256、キーはWindows資格情報マネージャーで管理）
 - [ ] 手動テスト全項目クリア（docs/testing.md 参照）
 
 ---
@@ -112,5 +113,11 @@
 - Quick Tunnel URL自動取得 + LINE Webhook URL自動更新スクリプト（start_tunnel.py）実装 — ドメイン不要、毎回のURL変更に自動対応
 - Cloudflare Zero Trust永続トンネルはドメイン必須のため断念、Quick Tunnel + 自動更新方式に変更
 - LINEからの全機能動作確認済み（会話、カレンダー、タスク管理、削除）
+
+### 2026-03-18（セキュリティ強化）
+- SQLCipher暗号化DB導入（sqlcipher3パッケージ、AES-256）
+- 暗号化キーはOS keyring（Windows資格情報マネージャー）で管理 — コード・.envに秘密情報なし
+- 移行スクリプト（scripts/migrate_to_sqlcipher.py）作成
+- 平文バックアップ（data/secretary.db.plaintext.backup）は動作確認後に削除可
 
 _（開発中に発生した問題・決定事項をここに記録）_
