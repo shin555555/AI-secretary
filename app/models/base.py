@@ -1,16 +1,51 @@
+import logging
+import secrets
 from datetime import datetime
+from urllib.parse import quote as urlquote
 
-from sqlalchemy import DateTime, create_engine, func
+import keyring
+from sqlalchemy import DateTime, create_engine, event, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
-from config.settings import settings
+logger = logging.getLogger(__name__)
 
 # DB パス
 DB_PATH = "data/secretary.db"
-DATABASE_URL = f"sqlite:///{DB_PATH}"
 
-# エンジン作成（SQLite、将来SQLCipherに置き換え予定）
-engine = create_engine(DATABASE_URL, echo=False)
+KEYRING_SERVICE = "ai-secretary"
+KEYRING_KEY_NAME = "db_encryption_key"
+
+
+def _get_or_create_db_key() -> str:
+    """keyringから暗号化キーを取得。なければ生成して保存"""
+    key = keyring.get_password(KEYRING_SERVICE, KEYRING_KEY_NAME)
+    if key:
+        return key
+
+    key = secrets.token_hex(32)
+    keyring.set_password(KEYRING_SERVICE, KEYRING_KEY_NAME, key)
+    logger.info("DB encryption key generated and stored in OS keyring")
+    return key
+
+
+def _create_engine():
+    """SQLCipher暗号化エンジンを作成"""
+    db_key = _get_or_create_db_key()
+    encoded_key = urlquote(db_key, safe="")
+    database_url = f"sqlite+pysqlcipher://:{encoded_key}@/{DB_PATH}"
+
+    eng = create_engine(database_url, echo=False)
+
+    @event.listens_for(eng, "connect")
+    def _set_cipher_pragmas(dbapi_conn, _connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA cipher_compatibility = 4")
+        cursor.close()
+
+    return eng
+
+
+engine = _create_engine()
 SessionLocal = sessionmaker(bind=engine)
 
 
