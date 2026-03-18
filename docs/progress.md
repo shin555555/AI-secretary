@@ -13,10 +13,10 @@
 | ✅ Phase 0 | 環境構築 | 完了 |
 | ✅ Phase 1 | LINE Echo Bot | 完了 |
 | ✅ Phase 2 | LLM統合（凛ペルソナ） | 完了 |
-| ⬜ Phase 3 | Googleカレンダー連携 | 未着手 |
-| ⬜ Phase 4 | タスク管理 + リマインド | 未着手 |
-| ⬜ Phase 5 | パーソナライズ | 未着手 |
-| ⬜ Phase 6 | 安定化・自動起動 | 未着手 |
+| ✅ Phase 3 | Googleカレンダー連携 | 完了 |
+| ✅ Phase 4 | タスク管理 + リマインド | 完了 |
+| ✅ Phase 5 | パーソナライズ | 完了 |
+| ✅ Phase 6 | 安定化・自動起動 | 完了 |
 
 ## Phase 0 チェックリスト（環境構築）
 
@@ -50,32 +50,37 @@
 
 ## Phase 3 チェックリスト（カレンダー）
 
-- [ ] Google OAuth2 セットアップスクリプト
-- [ ] calendar_service.py（取得・作成・衝突検出）
-- [ ] 「今日の予定は？」→ 実データ返却
-- [ ] 「明日14時に面談」→ カレンダー登録
+- [x] Google OAuth2 セットアップスクリプト（scripts/setup_google_oauth.py）
+- [x] calendar_service.py（取得・作成・衝突検出）
+- [x] 「今日の予定は？」→ 実データ返却
+- [x] 「明日14時に面談」→ カレンダー登録
+- [x] 繰り返し予定（RRULE）対応
+- [x] datetime_parser.py（コードベース日付解決、LLMは生テキスト抽出のみ）
 
 ## Phase 4 チェックリスト（タスク管理）
 
 - [x] SQLite DB セットアップ（base.py）※標準SQLite版、SQLCipher化はPhase 6で検討
-- [ ] Task モデル・スキーマ
-- [ ] task_service.py（CRUD + 優先度）
-- [ ] 自然言語タスク解析
-- [ ] APScheduler: 朝8:00 ブリーフィング
-- [ ] APScheduler: 期限24時間前リマインド
+- [x] Task・RecurringTask モデル（app/models/task.py）
+- [x] task_service.py（CRUD + 優先度 + 削除 + 繰り返しタスク）
+- [x] task_parser.py（コードベース日付解決）
+- [x] APScheduler: 朝8:00 ブリーフィング（scheduler/jobs.py）
+- [x] APScheduler: 期限24時間前リマインド 18:00（scheduler/jobs.py）
+- [x] APScheduler: 繰り返しタスク自動生成 0:00（scheduler/jobs.py）
 
 ## Phase 5 チェックリスト（パーソナライズ）
 
 - [x] memory_service.py（Phase 2で先行実装済み）
-- [ ] preference テーブル・CRUD
-- [ ] interaction_log テーブル
+- [x] Preference モデル・CRUD（app/models/preference.py, app/services/preference_service.py）
+- [x] InteractionLog モデル・行動ログ記録（app/models/preference.py）
 - [x] コンテキスト記憶（直近10ターン）（Phase 2で先行実装済み）
 
 ## Phase 6 チェックリスト（安定化）
 
-- [ ] エラーハンドリング全体見直し
-- [ ] Windows 自動起動設定（NSSM）
-- [ ] ログローテーション設定
+- [x] エラーハンドリング（グレースフルデグラデーション実装済み）
+- [x] Windows 自動起動設定（タスクスケジューラ: 平日7:30スリープ解除+起動、ログオン時起動）
+- [x] ログローテーション設定（RotatingFileHandler: 5MB x 3ファイル）
+- [x] start_server.bat / stop_server.bat（英語版、エンコーディング問題対応済み）
+- [x] Quick Tunnel + LINE Webhook URL自動更新（scripts/start_tunnel.py）
 - [ ] 手動テスト全項目クリア（docs/testing.md 参照）
 
 ---
@@ -98,5 +103,14 @@
 - `scripts/setup_google_oauth.py` 経由で初回認証フロー実行、`data/google_token.json` 保存完了
 - **Phase 0 （環境構築）完全完了！**
 - 次は **Phase 3（Googleカレンダー連携実装）** に移ります
+
+### 2026-03-18（Phase 3〜6 実装）
+- **Phase 3 完了**: calendar_service.py、datetime_parser.py（コードベース日付解決に変更 — LLMの曜日計算が不正確だったため）
+- **Phase 4 完了**: Task/RecurringTaskモデル、task_service.py、task_parser.py、APScheduler 3ジョブ（朝ブリーフィング/繰り返しタスク生成/期限リマインド）
+- **Phase 5 完了**: Preference/InteractionLogモデル、preference_service.py
+- **Phase 6 完了**: タスクスケジューラ（平日7:30 WakeToRun）、start_server.bat/stop_server.bat（英語化 — 日本語batがエンコーディングエラー）、ログローテーション
+- Quick Tunnel URL自動取得 + LINE Webhook URL自動更新スクリプト（start_tunnel.py）実装 — ドメイン不要、毎回のURL変更に自動対応
+- Cloudflare Zero Trust永続トンネルはドメイン必須のため断念、Quick Tunnel + 自動更新方式に変更
+- LINEからの全機能動作確認済み（会話、カレンダー、タスク管理、削除）
 
 _（開発中に発生した問題・決定事項をここに記録）_

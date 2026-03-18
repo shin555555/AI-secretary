@@ -12,6 +12,7 @@ INTENT_CLASSIFICATION_PROMPT = """\
 - task_recurring: 繰り返しタスクを登録（例: 「国保連請求 毎月7日」）
 - task_list: タスク一覧を確認（例: 「タスク一覧」「今日のタスク」「ルーティン一覧」）
 - task_done: タスクを完了にする（例: 「タスク1完了」「報告書作成 完了」）
+- task_delete: タスクを削除する（例: 「報告書作成を削除」「タスク1削除」「〇〇を消して」）
 - task_priority: 優先タスクを提案（例: 「次何やる？」「1時間空いた」）
 - briefing: 今日のまとめ・ブリーフィング（例: 「今日のまとめ」「ブリーフィング」）
 - preference: 設定変更・記憶（例: 「覚えて：〇〇」「設定変更」）
@@ -33,6 +34,7 @@ VALID_INTENTS = [
     "task_recurring",
     "task_list",
     "task_done",
+    "task_delete",
     "task_priority",
     "briefing",
     "preference",

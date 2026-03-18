@@ -29,5 +29,10 @@ def init_db() -> None:
     """テーブル作成（存在しなければ）"""
     import os
 
+    # 全モデルをインポートしてメタデータに登録
+    import app.models.conversation  # noqa: F401
+    import app.models.preference  # noqa: F401
+    import app.models.task  # noqa: F401
+
     os.makedirs("data", exist_ok=True)
     Base.metadata.create_all(bind=engine)
