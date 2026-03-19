@@ -6,7 +6,9 @@ from app.prompts.intent_classifier import INTENT_CLASSIFICATION_PROMPT, VALID_IN
 from app.prompts.system_prompt import SYSTEM_PROMPT
 from app.services.calendar_service import calendar_service
 from app.services.datetime_parser import parse_schedule_from_message
+from app.services.gmail_service import gmail_service
 from app.services.llm_service import llm_service
+from app.services.mail_filter_service import mail_filter_service
 from app.services.memory_service import memory_service
 from app.services.pii_filter import pii_filter
 from app.services.preference_service import preference_service
@@ -19,8 +21,17 @@ logger = logging.getLogger(__name__)
 class Secretary:
     """凛のコアオーケストレータ: インテント分類 → サービスルーティング → 応答生成"""
 
+    def __init__(self) -> None:
+        self._pending_action: dict | None = None
+
     async def handle_message(self, user_message: str) -> str:
         """ユーザーメッセージを処理して応答を生成"""
+        # メール下書き/送信の確認応答を処理
+        if self._pending_action:
+            confirmation_result = await self._handle_confirmation(user_message)
+            if confirmation_result:
+                return confirmation_result
+
         intent = await self._classify_intent(user_message)
         logger.info(f"インテント: {intent}")
 
@@ -39,6 +50,13 @@ class Secretary:
             "task_priority": lambda: self._handle_task_priority(),
             "briefing": lambda: self._handle_briefing(),
             "preference": lambda: self._handle_preference(user_message),
+            "mail_check": lambda: self._handle_mail_check(),
+            "mail_detail": lambda: self._handle_mail_detail(user_message),
+            "mail_draft": lambda: self._handle_mail_draft(user_message),
+            "mail_reply": lambda: self._handle_mail_reply(user_message),
+            "mail_drafts": lambda: self._handle_mail_drafts(),
+            "mail_send": lambda: self._handle_mail_send(user_message),
+            "help": lambda: self._handle_help(),
         }
 
         handler = handler_map.get(intent)
@@ -293,7 +311,317 @@ class Secretary:
         if all_pending:
             lines.append(f"📋 未完了タスク合計: {len(all_pending)}件")
 
+        lines.append("")
+
+        # メール
+        try:
+            messages = await gmail_service.get_important_messages()
+            if messages:
+                lines.append(gmail_service.format_for_briefing(messages))
+            else:
+                lines.append("📧 未読の重要メールはありません。")
+        except Exception as e:
+            logger.warning(f"ブリーフィングのメール取得失敗: {e}")
+            lines.append("📧 メールの取得に失敗しました。")
+
         return "\n".join(lines)
+
+    # --- メール ---
+
+    async def _handle_mail_check(self) -> str:
+        """重要メール一覧を表示"""
+        messages = await gmail_service.get_important_messages()
+        if messages is None:
+            return "申し訳ございません、Gmailへの接続に失敗しました。Google認証にGmail権限が含まれているか確認してください。"
+
+        if not messages:
+            return "📧 未読の重要メールはありません。"
+
+        # LLMでトリアージ（件名・差出人・snippetのみ渡す）
+        triage_results = await self._triage_messages(messages)
+
+        # トリアージ結果をメッセージに付与
+        for i, msg in enumerate(messages):
+            if i < len(triage_results):
+                msg["triage_summary"] = triage_results[i].get("summary", msg.get("snippet", "")[:60])
+
+        return gmail_service.format_mail_list(messages, triage_results)
+
+    async def _handle_mail_detail(self, user_message: str) -> str:
+        """メールの詳細（本文要約）を表示"""
+        num = self._extract_number(user_message)
+        if not num:
+            return "メール番号を指定してください。例：「メール1の詳細」"
+
+        msg = gmail_service.get_cached_message(num)
+        if not msg:
+            return f"メール{num}が見つかりません。まず「メール確認」で一覧を表示してください。"
+
+        body = await gmail_service.get_message_body(msg["id"])
+        if not body:
+            return f"メール{num}の本文を取得できませんでした。"
+
+        # LLMで要約（Ollamaローカル優先）
+        summary_prompt = f"以下のメール本文を3行以内で要約してください。\n\n差出人: {msg['from_name']}\n件名: {msg['subject']}\n\n{body[:800]}"
+
+        if await llm_service._is_ollama_available():
+            summary = await llm_service.generate(prompt=summary_prompt, temperature=0.3)
+        else:
+            filtered = pii_filter.redact(summary_prompt)
+            summary = await llm_service.generate(prompt=filtered, temperature=0.3)
+            summary = pii_filter.restore(summary)
+
+        from_display = msg["from_name"] or msg["from_email"]
+        return f"📧 メール{num}の詳細\n\n差出人: {from_display}\n件名: {msg['subject']}\n時刻: {msg['time']}\n\n📝 要約:\n{summary}"
+
+    async def _handle_mail_draft(self, user_message: str) -> str:
+        """メールの返信下書きを作成"""
+        num = self._extract_number(user_message)
+        if not num:
+            return "メール番号を指定してください。例：「メール1に下書き。〇〇と伝えて」"
+
+        msg = gmail_service.get_cached_message(num)
+        if not msg:
+            return f"メール{num}が見つかりません。まず「メール確認」で一覧を表示してください。"
+
+        # ユーザーの指示を抽出
+        instruction = re.sub(r"メール\s*\d+\s*に?\s*下書き[。、]?\s*", "", user_message).strip()
+        if not instruction:
+            instruction = "適切な返信"
+
+        # 返信文を生成
+        reply_body = await self._generate_reply(msg, instruction)
+
+        # 保留状態として会話コンテキストに保存
+        self._pending_action = {
+            "type": "draft",
+            "msg": msg,
+            "reply_body": reply_body,
+            "subject": f"Re: {msg['subject']}",
+        }
+
+        return f"以下の内容で下書き作成します。よろしいですか？\n\n---\n{reply_body}\n---\n\n「OK」で下書き保存、「修正して：〇〇」で書き直します。"
+
+    async def _handle_mail_reply(self, user_message: str) -> str:
+        """メールに返信して送信"""
+        num = self._extract_number(user_message)
+        if not num:
+            return "メール番号を指定してください。例：「メール1に返信して。〇〇と伝えて」"
+
+        msg = gmail_service.get_cached_message(num)
+        if not msg:
+            return f"メール{num}が見つかりません。まず「メール確認」で一覧を表示してください。"
+
+        # ユーザーの指示を抽出
+        instruction = re.sub(r"メール\s*\d+\s*に?\s*返信(して)?[。、]?\s*", "", user_message).strip()
+        if not instruction:
+            instruction = "適切な返信"
+
+        # 返信文を生成
+        reply_body = await self._generate_reply(msg, instruction)
+
+        # 保留状態として保存
+        self._pending_action = {
+            "type": "send",
+            "msg": msg,
+            "reply_body": reply_body,
+            "subject": f"Re: {msg['subject']}",
+        }
+
+        return f"以下の内容で返信します。よろしいですか？\n\n---\n{reply_body}\n---\n\n「送信」で送信、「修正して：〇〇」で書き直します。"
+
+    async def _handle_mail_drafts(self) -> str:
+        """下書き一覧を表示"""
+        drafts = await gmail_service.get_drafts()
+        if drafts is None:
+            return "申し訳ございません、下書きの取得に失敗しました。"
+        return gmail_service.format_draft_list(drafts)
+
+    async def _handle_mail_send(self, user_message: str) -> str:
+        """下書きを送信"""
+        num = self._extract_number(user_message)
+        if not num:
+            return "下書き番号を指定してください。例：「下書き1を送信して」"
+
+        drafts = await gmail_service.get_drafts()
+        if not drafts or num > len(drafts):
+            return f"下書き{num}が見つかりません。「下書き一覧」で確認してください。"
+
+        draft = drafts[num - 1]
+        result = await gmail_service.send_draft(draft["draft_id"])
+        if result:
+            return f"✅ {draft['to']}への返信を送信しました。"
+        return "申し訳ございません、送信に失敗しました。"
+
+    async def _triage_messages(self, messages: list[dict]) -> list[dict]:
+        """LLMでメールをトリアージ（件名・差出人・snippetのみ）"""
+        mail_list = "\n".join(
+            f"{i+1}. 差出人: {m['from_name']} <{m['from_email']}> | 件名: {m['subject']} | 冒頭: {m.get('snippet', '')[:80]}"
+            for i, m in enumerate(messages)
+        )
+
+        prompt = f"""以下のメール一覧を分類してください。各メールについて以下の形式で1行ずつ返してください:
+番号|レベル|要約
+
+レベルは以下の3つから選択:
+- reply: 相手が返事を待っている（要返信）
+- check: 読んでおくべき（要確認、返信不要）
+- skip: 対応不要
+
+要約は20文字以内で内容を簡潔に。
+
+メール一覧:
+{mail_list}"""
+
+        try:
+            if await llm_service._is_ollama_available():
+                result = await llm_service.generate(prompt=prompt, temperature=0.2)
+            else:
+                filtered = pii_filter.redact(prompt)
+                result = await llm_service.generate(prompt=filtered, temperature=0.2)
+                result = pii_filter.restore(result)
+
+            # パース
+            triage = []
+            for line in result.strip().split("\n"):
+                parts = line.split("|")
+                if len(parts) >= 3:
+                    level = parts[1].strip().lower()
+                    if level not in ("reply", "check", "skip"):
+                        level = "check"
+                    triage.append({
+                        "level": level,
+                        "summary": parts[2].strip(),
+                    })
+                else:
+                    triage.append({"level": "check", "summary": ""})
+
+            return triage
+        except Exception as e:
+            logger.warning(f"トリアージ失敗: {e}")
+            return [{"level": "check", "summary": ""} for _ in messages]
+
+    async def _generate_reply(self, msg: dict, instruction: str) -> str:
+        """LLMで返信文を生成"""
+        body = await gmail_service.get_message_body(msg["id"], max_chars=500)
+        body_text = body[:300] if body else msg.get("snippet", "")
+
+        prompt = f"""以下のメールに対する返信文を作成してください。
+
+差出人: {msg['from_name']}
+件名: {msg['subject']}
+本文（冒頭）: {body_text}
+
+ユーザーの指示: {instruction}
+
+【ルール】
+- ビジネスメールとして適切な丁寧語で書く
+- 宛名（〇〇様）と締めの挨拶を含める
+- 簡潔にまとめる（5行以内）
+- 署名は不要
+- 返信文のみを出力（説明不要）"""
+
+        if await llm_service._is_ollama_available():
+            return await llm_service.generate(prompt=prompt, temperature=0.5)
+        else:
+            filtered = pii_filter.redact(prompt)
+            result = await llm_service.generate(prompt=filtered, temperature=0.5)
+            return pii_filter.restore(result)
+
+    async def _handle_confirmation(self, user_message: str) -> str | None:
+        """メール下書き/送信の確認応答を処理"""
+        action = self._pending_action
+        if not action:
+            return None
+
+        msg_lower = user_message.strip().lower()
+        msg_text = user_message.strip()
+
+        # 「OK」→ 下書き保存
+        if action["type"] == "draft" and msg_lower in ("ok", "ＯＫ", "はい", "おk", "オッケー", "おけ"):
+            self._pending_action = None
+            result = await gmail_service.create_draft(
+                to=action["msg"]["from_email"],
+                subject=action["subject"],
+                body=action["reply_body"],
+                thread_id=action["msg"].get("thread_id"),
+                in_reply_to=action["msg"].get("message_id_header"),
+            )
+            if result:
+                memory_service.save_message(role="assistant", content="📝 下書きをGmailに保存しました。")
+                return "📝 下書きをGmailに保存しました。"
+            return "申し訳ございません、下書きの保存に失敗しました。"
+
+        # 「送信」→ 直接送信
+        if action["type"] == "send" and msg_lower in ("送信", "送って", "はい", "ok", "ＯＫ"):
+            self._pending_action = None
+            result = await gmail_service.send_reply(
+                to=action["msg"]["from_email"],
+                subject=action["subject"],
+                body=action["reply_body"],
+                thread_id=action["msg"].get("thread_id"),
+                in_reply_to=action["msg"].get("message_id_header"),
+            )
+            if result:
+                memory_service.save_message(role="assistant", content="✅ 返信を送信しました。")
+                return "✅ 返信を送信しました。"
+            return "申し訳ございません、送信に失敗しました。"
+
+        # 「修正して：〇〇」→ 書き直し
+        modify_match = re.search(r"修正(して)?[：:]?\s*(.+)", msg_text)
+        if modify_match:
+            new_instruction = modify_match.group(2).strip()
+            reply_body = await self._generate_reply(action["msg"], new_instruction)
+            action["reply_body"] = reply_body
+
+            if action["type"] == "draft":
+                return f"修正しました。以下の内容で下書き作成します。よろしいですか？\n\n---\n{reply_body}\n---\n\n「OK」で下書き保存、「修正して：〇〇」で書き直します。"
+            else:
+                return f"修正しました。以下の内容で返信します。よろしいですか？\n\n---\n{reply_body}\n---\n\n「送信」で送信、「修正して：〇〇」で書き直します。"
+
+        # 「キャンセル」「やめる」→ 取り消し
+        if msg_lower in ("キャンセル", "やめる", "やめて", "取り消し", "cancel"):
+            self._pending_action = None
+            return "操作をキャンセルしました。"
+
+        # 確認応答として認識できなかった → pending を維持しつつ None を返す（通常のインテント分類へ）
+        self._pending_action = None
+        return None
+
+    def _extract_number(self, text: str) -> int | None:
+        """テキストから数字を抽出"""
+        match = re.search(r"(\d+)", text)
+        return int(match.group(1)) if match else None
+
+    async def _handle_help(self) -> str:
+        """凛にできることを表示"""
+        return """📖 凛にできること
+
+📅 スケジュール
+• 「今日の予定」— 今日の予定を確認
+• 「今週の予定」— 今日から1週間の予定を確認
+• 「予定を追加したい」— カレンダーに予定を登録
+
+📋 タスク管理
+• 「タスク一覧」— 未完了タスクを表示
+• 「タスク追加：〇〇 金曜まで」— タスクを登録
+• 「タスク1完了」— タスクを完了にする
+• 「〇〇を削除して」— タスクを削除
+
+📧 メール
+• 「メール確認」— 重要な未読メールを表示
+• 「メール1の詳細」— メールの本文要約を表示
+• 「メール1に下書き。〇〇と伝えて」— 返信の下書きを作成
+• 「メール1に返信して。〇〇と伝えて」— 返信を送信
+• 「下書き一覧」— 保存した下書きを確認
+• 「下書き1を送信して」— 下書きを送信
+
+⚙️ その他
+• 「ブリーフィング」— 予定+タスク+メールのまとめ
+• 「覚えて：〇〇」— 設定や情報を記憶
+• 「設定一覧」— 覚えている情報を確認
+
+何でもお気軽に話しかけてくださいね。"""
 
     # --- パーソナライズ ---
 

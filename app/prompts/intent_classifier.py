@@ -16,10 +16,18 @@ INTENT_CLASSIFICATION_PROMPT = """\
 - task_priority: 優先タスクを提案（例: 「次何やる？」「1時間空いた」）
 - briefing: 今日のまとめ・ブリーフィング（例: 「今日のまとめ」「ブリーフィング」）
 - preference: 設定変更・記憶（例: 「覚えて：〇〇」「設定変更」）
+- mail_check: メールを確認（例: 「メール確認」「未読メール」「メールある？」）
+- mail_detail: メールの詳細を見る（例: 「メール1の詳細」「メール1を見せて」）
+- mail_draft: メールの下書きを作成（例: 「メール1に下書き」「メール1に下書き。〇〇と伝えて」）
+- mail_reply: メールに返信して送信（例: 「メール1に返信して」「メール1に返信して。〇〇と伝えて」）
+- mail_drafts: 下書き一覧を確認（例: 「下書き一覧」「下書き確認」）
+- mail_send: 下書きを送信（例: 「下書き1を送信して」「下書き1送信」）
+- help: 使い方やできることを確認（例: 「ヘルプ」「使い方」「何ができる？」「できること」）
 - general: 上記に当てはまらない一般的な会話・質問
 
 【ルール】
 - インテント名のみを返す（説明不要）
+- 「OK」「送信」「はい」などの確認応答は general として返す（会話コンテキストで判定するため）
 - 迷った場合は general を選ぶ
 
 ユーザーメッセージ: {user_message}
@@ -38,5 +46,12 @@ VALID_INTENTS = [
     "task_priority",
     "briefing",
     "preference",
+    "mail_check",
+    "mail_detail",
+    "mail_draft",
+    "mail_reply",
+    "mail_drafts",
+    "mail_send",
+    "help",
     "general",
 ]

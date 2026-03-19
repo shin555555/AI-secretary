@@ -10,13 +10,17 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 
 from config.settings import settings
 
-# アプリケーションに必要なスコープ
-# ここでは Google Calendar の予定を読み書きする権限を要求します
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
+# アプリケーションに必要なスコープ（Calendar + Gmail）
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.compose",
+]
 
 
 def main() -> None:
-    print("=== Google Calendar API 認証セットアップ ===")
+    print("=== Google API 認証セットアップ (Calendar + Gmail) ===")
     
     # 認証情報JSONファイルのパスを確認
     credentials_path = settings.google_credentials_path

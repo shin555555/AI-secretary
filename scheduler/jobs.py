@@ -11,6 +11,7 @@ from linebot.v3.messaging import (
 )
 
 from app.services.calendar_service import calendar_service
+from app.services.gmail_service import gmail_service
 from app.services.task_service import task_service
 from config.settings import settings
 
@@ -84,6 +85,20 @@ def morning_briefing() -> None:
             lines.append(f"⚠️ 明日期限のタスク（{len(tomorrow_tasks)}件）")
             for task in tomorrow_tasks:
                 lines.append(f"• {task.title}")
+
+        lines.append("")
+
+        # 未読メール
+        try:
+            mail_loop = asyncio.new_event_loop()
+            messages = mail_loop.run_until_complete(gmail_service.get_important_messages())
+            mail_loop.close()
+            if messages:
+                lines.append(gmail_service.format_for_briefing(messages))
+            else:
+                lines.append("📧 未読の重要メールはありません。")
+        except Exception as e:
+            logger.warning(f"ブリーフィングのメール取得失敗: {e}")
 
         lines.append("\n本日もよろしくお願いいたします。")
 

@@ -1,11 +1,11 @@
 """LINEリッチメニューのセットアップスクリプト
 
-B案: 2行3列（上段=カレンダー系、下段=タスク系）
-  📅 今日の予定 | 🗓️ 週間予定  | 📝 予定追加
-  📋 タスク一覧 | ➕ タスク追加 | ✅ ブリーフィング
+3行3列（9ボタン）
+  📅 今日の予定 | 🗓️ 週間予定  | 📝 予定追加      ← 青
+  📋 タスク一覧 | ➕ タスク追加 | ✅ ブリーフィング  ← 緑
+  📧 メール確認 | 📝 下書き一覧 | ❓ ヘルプ         ← パープル
 """
 
-import json
 import os
 import sys
 from pathlib import Path
@@ -19,15 +19,15 @@ sys.path.append(str(PROJECT_DIR))
 
 MENU_IMAGE_PATH = PROJECT_DIR / "data" / "rich_menu.png"
 
-# リッチメニューサイズ（LINE仕様: 2500x1686 for 2行）
+# リッチメニューサイズ（LINE仕様: 2500x1686 が最大）
 WIDTH = 2500
 HEIGHT = 1686
 COLS = 3
-ROWS = 2
+ROWS = 3
 CELL_W = WIDTH // COLS
 CELL_H = HEIGHT // ROWS
 
-# ボタン定義（B案）
+# ボタン定義（3x3）
 BUTTONS = [
     # 上段: カレンダー系（統一ブルー）
     {"label": "今日の予定", "emoji": "\U0001f4c5", "text": "今日の予定は？",
@@ -36,13 +36,20 @@ BUTTONS = [
      "bg": "#4A90D9"},
     {"label": "予定追加", "emoji": "\U0001f4dd", "text": "予定を追加したい",
      "bg": "#4A90D9"},
-    # 下段: タスク系（統一グリーン）
+    # 中段: タスク系（統一グリーン）
     {"label": "タスク一覧", "emoji": "\U0001f4cb", "text": "タスク一覧",
      "bg": "#2ECC71"},
     {"label": "タスク追加", "emoji": "➕", "text": "タスクを追加したい",
      "bg": "#2ECC71"},
     {"label": "ブリーフィング", "emoji": "✅", "text": "ブリーフィング",
      "bg": "#2ECC71"},
+    # 下段: メール・その他（統一パープル）
+    {"label": "メール確認", "emoji": "\U0001f4e7", "text": "メール確認",
+     "bg": "#8E44AD"},
+    {"label": "下書き一覧", "emoji": "\U0001f4dd", "text": "下書き一覧",
+     "bg": "#8E44AD"},
+    {"label": "ヘルプ", "emoji": "\u2753", "text": "ヘルプ",
+     "bg": "#8E44AD"},
 ]
 
 
@@ -94,9 +101,9 @@ def generate_menu_image() -> Path:
     img = Image.new("RGB", (WIDTH, HEIGHT))
     draw = ImageDraw.Draw(img)
 
-    font_label = find_font(size=96)
-    emoji_font_large = find_emoji_font(size=160)
-    font_fallback = find_font(size=160)
+    font_label = find_font(size=72)
+    emoji_font_large = find_emoji_font(size=120)
+    font_fallback = find_font(size=120)
 
     for i, btn in enumerate(BUTTONS):
         col = i % COLS
@@ -161,7 +168,7 @@ def create_rich_menu(token: str) -> str | None:
     body = {
         "size": {"width": WIDTH, "height": HEIGHT},
         "selected": True,
-        "name": "凛メニュー",
+        "name": "凛メニュー v2",
         "chatBarText": "メニュー",
         "areas": areas,
     }
@@ -243,7 +250,7 @@ def delete_existing_menus(token: str) -> None:
 
 
 def main() -> None:
-    print("=== LINE Rich Menu Setup (B案) ===\n")
+    print("=== LINE Rich Menu Setup (3x3) ===\n")
 
     token = get_line_token()
     if not token:

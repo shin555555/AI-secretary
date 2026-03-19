@@ -66,6 +66,7 @@ def init_db() -> None:
 
     # 全モデルをインポートしてメタデータに登録
     import app.models.conversation  # noqa: F401
+    import app.models.mail_filter  # noqa: F401
     import app.models.preference  # noqa: F401
     import app.models.task  # noqa: F401
 
