@@ -246,14 +246,14 @@ class GmailService:
 
             drafts = []
             for d in draft_list:
-                draft = service.users().drafts().get(userId="me", id=d["id"]).execute()
+                draft = service.users().drafts().get(userId="me", id=d["id"], format="full").execute()
                 msg = draft.get("message", {})
-                headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+                headers = {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
                 drafts.append({
                     "draft_id": d["id"],
-                    "to": headers.get("To", ""),
-                    "subject": headers.get("Subject", "（件名なし）"),
-                    "date": headers.get("Date", ""),
+                    "to": headers.get("to", ""),
+                    "subject": headers.get("subject", "（件名なし）"),
+                    "date": headers.get("date", ""),
                 })
             return drafts
 

@@ -78,7 +78,13 @@ class Secretary:
         raw_intent = await llm_service.generate(prompt=prompt, temperature=0.1)
 
         intent = raw_intent.strip().lower()
-        for valid in VALID_INTENTS:
+
+        # 完全一致を優先
+        if intent in VALID_INTENTS:
+            return intent
+
+        # 部分一致フォールバック（長い名前を先にチェック）
+        for valid in sorted(VALID_INTENTS, key=len, reverse=True):
             if valid in intent:
                 return valid
 

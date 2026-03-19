@@ -3,7 +3,7 @@
 3行3列（9ボタン）
   📅 今日の予定 | 🗓️ 週間予定  | 📝 予定追加      ← 青
   📋 タスク一覧 | ➕ タスク追加 | ✅ ブリーフィング  ← 緑
-  📧 メール確認 | 📝 下書き一覧 | ❓ ヘルプ         ← パープル
+  📧 メール確認 | 📝 下書き一覧 | ❓ ヘルプ         ← オレンジ
 """
 
 import os
@@ -43,13 +43,13 @@ BUTTONS = [
      "bg": "#2ECC71"},
     {"label": "ブリーフィング", "emoji": "✅", "text": "ブリーフィング",
      "bg": "#2ECC71"},
-    # 下段: メール・その他（統一パープル）
+    # 下段: メール・その他（統一オレンジ）
     {"label": "メール確認", "emoji": "\U0001f4e7", "text": "メール確認",
-     "bg": "#8E44AD"},
+     "bg": "#E67E22"},
     {"label": "下書き一覧", "emoji": "\U0001f4dd", "text": "下書き一覧",
-     "bg": "#8E44AD"},
+     "bg": "#E67E22"},
     {"label": "ヘルプ", "emoji": "\u2753", "text": "ヘルプ",
-     "bg": "#8E44AD"},
+     "bg": "#E67E22"},
 ]
 
 
@@ -101,9 +101,9 @@ def generate_menu_image() -> Path:
     img = Image.new("RGB", (WIDTH, HEIGHT))
     draw = ImageDraw.Draw(img)
 
-    font_label = find_font(size=72)
-    emoji_font_large = find_emoji_font(size=120)
-    font_fallback = find_font(size=120)
+    font_label = find_font(size=96)
+    emoji_font_large = find_emoji_font(size=160)
+    font_fallback = find_font(size=160)
 
     for i, btn in enumerate(BUTTONS):
         col = i % COLS
@@ -129,15 +129,15 @@ def generate_menu_image() -> Path:
             ebbox = draw.textbbox((0, 0), emoji_text, font=e_font)
             ew = ebbox[2] - ebbox[0]
             eh = ebbox[3] - ebbox[1]
-            draw.text((cx - ew // 2, cy - eh - 30), emoji_text, font=e_font, fill="#FFFFFF")
+            draw.text((cx - ew // 2, cy - eh - 20), emoji_text, font=e_font, fill="#FFFFFF")
         except Exception:
-            draw.text((cx - 80, cy - 190), emoji_text, font=font_fallback, fill="#FFFFFF")
+            draw.text((cx - 100, cy - 220), emoji_text, font=font_fallback, fill="#FFFFFF")
 
         # ラベルを描画
         label = btn["label"]
         lbbox = draw.textbbox((0, 0), label, font=font_label)
         lw = lbbox[2] - lbbox[0]
-        draw.text((cx - lw // 2, cy + 60), label, font=font_label, fill="#FFFFFF")
+        draw.text((cx - lw // 2, cy + 50), label, font=font_label, fill="#FFFFFF")
 
     MENU_IMAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
     img.save(str(MENU_IMAGE_PATH))
