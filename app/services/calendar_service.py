@@ -354,6 +354,11 @@ class CalendarService:
                 try:
                     e_start = datetime.fromisoformat(event["start"])
                     e_end = datetime.fromisoformat(event["end"])
+                    # timezone-aware → naive に統一（JSTローカル前提）
+                    if e_start.tzinfo is not None:
+                        e_start = e_start.replace(tzinfo=None)
+                    if e_end.tzinfo is not None:
+                        e_end = e_end.replace(tzinfo=None)
                     if e_start.date() == target_date.date():
                         day_events.append((e_start, e_end, event["title"]))
                 except ValueError:
