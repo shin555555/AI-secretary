@@ -1,6 +1,7 @@
+import json
 import re
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.prompts.intent_classifier import INTENT_CLASSIFICATION_PROMPT, VALID_INTENTS
 from app.prompts.system_prompt import SYSTEM_PROMPT
@@ -25,6 +26,7 @@ class Secretary:
         self._pending_action: dict | None = None
         self._pending_slots: list[dict] = []
         self._pending_slot_purpose: str | None = None
+        self._pending_slot_duration: int = 60
         self._last_slot_skip: int = 0
 
     async def handle_message(self, user_message: str) -> str:
@@ -199,12 +201,17 @@ class Secretary:
 JSONのみ返してください。
 メッセージ：{user_message}"""
 
-        raw = await llm_service.generate(prompt=extract_prompt, temperature=0.1)
+        if await llm_service._is_ollama_available():
+            raw = await llm_service.generate(prompt=extract_prompt, temperature=0.1)
+        else:
+            filtered_prompt = pii_filter.redact(extract_prompt)
+            raw = await llm_service.generate(prompt=filtered_prompt, temperature=0.1)
+            raw = pii_filter.restore(raw)
+
         purpose = None
         duration = 60
         is_alt = False
         try:
-            import json
             clean = raw.strip()
             if "```" in clean:
                 clean = clean.split("```")[1]
@@ -219,7 +226,7 @@ JSONのみ返してください。
 
         # 「他の日時は？」の場合、前回のスキップ数を加算
         skip = 0
-        if is_alt and hasattr(self, "_last_slot_skip"):
+        if is_alt and self._last_slot_skip:
             skip = self._last_slot_skip
 
         slots = await calendar_service.find_available_slots(
@@ -248,6 +255,7 @@ JSONのみ返してください。
         # 選択用に候補を保持
         self._pending_slots = display_slots
         self._pending_slot_purpose = purpose
+        self._pending_slot_duration = duration
 
         return "\n".join(lines)
 
@@ -277,14 +285,10 @@ JSONのみ返してください。
         purpose = getattr(self, "_pending_slot_purpose", None) or "予定"
         self._pending_slots = []
 
-        # カレンダーに登録
-        from datetime import timedelta as td
+        # カレンダーに登録（ユーザーが指定した希望時間で）
+        duration = getattr(self, "_pending_slot_duration", 60)
         start_dt = selected["start_dt"]
-        end_dt = start_dt + td(minutes=selected["minutes"])
-        # 選択した時間枠全部ではなく、元の希望時間で登録
-        # duration_minutesは保持していないので、end_dtはstart+元の枠で計算
-        # ただし枠全体を予約するのは不自然なので、1時間をデフォルトに
-        end_dt = start_dt + td(hours=1)
+        end_dt = start_dt + timedelta(minutes=duration)
 
         result = await calendar_service.create_event(
             title=purpose, start_datetime=start_dt, end_datetime=end_dt,
@@ -427,11 +431,9 @@ JSONのみ返してください。
 
     async def _handle_task_priority(self, user_message: str) -> str:
         """空き時間・予定・タスクを総合的に判断して提案"""
-        from datetime import datetime as dt
-
         tasks = task_service.get_pending_tasks()
         week_events = await calendar_service.get_upcoming_events(days=7)
-        now = dt.now()
+        now = datetime.now()
         weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
 
         # --- コード側で状況整理 ---

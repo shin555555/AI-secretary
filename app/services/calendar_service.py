@@ -341,7 +341,9 @@ class CalendarService:
                 if now > day_start:
                     # 30分単位に切り上げ
                     minute = now.minute
-                    if minute <= 30:
+                    if minute == 0:
+                        day_start = now.replace(second=0, microsecond=0)
+                    elif minute <= 30:
                         day_start = now.replace(minute=30, second=0, microsecond=0)
                     else:
                         day_start = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
