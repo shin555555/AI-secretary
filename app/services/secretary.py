@@ -82,14 +82,21 @@ class Secretary:
         return f"本日の予定です：\n\n{formatted}"
 
     async def _handle_schedule_week(self, user_message: str) -> str:
-        """今週または来週の予定を取得して返答"""
-        weeks_offset = 1 if any(w in user_message for w in ["来週", "next week"]) else 0
-        events = await calendar_service.get_week_events(weeks_offset=weeks_offset)
+        """週間予定を取得して返答（今日から/今週/来週）"""
+        if any(w in user_message for w in ["来週", "next week"]):
+            events = await calendar_service.get_week_events(weeks_offset=1)
+            label = "来週"
+        elif any(w in user_message for w in ["今日から", "これから", "向こう", "今後"]):
+            events = await calendar_service.get_upcoming_events(days=7)
+            label = "今日から1週間"
+        else:
+            events = await calendar_service.get_upcoming_events(days=7)
+            label = "今日から1週間"
+
         if events is None:
             return "申し訳ございません、カレンダーへの接続に失敗しました。"
 
-        formatted = calendar_service.format_events_for_display(events)
-        label = "来週" if weeks_offset == 1 else "今週"
+        formatted = calendar_service.format_events_for_display(events, show_date=True)
         if formatted == "予定はありません。":
             return f"{label}の予定はございません。"
 

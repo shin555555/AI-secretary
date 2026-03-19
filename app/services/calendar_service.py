@@ -63,12 +63,20 @@ class CalendarService:
         return await self._get_events_for_range(days=0)
 
     async def get_week_events(self, weeks_offset: int = 0) -> list[dict]:
-        """今週または来週の予定を取得"""
+        """今週または来週の予定を取得（月曜起点）"""
         today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        # 今週の月曜日を基準
         start_of_week = today - timedelta(days=today.weekday()) + timedelta(weeks=weeks_offset)
         end_of_week = start_of_week + timedelta(days=7)
+        return await self._get_events_between(start_of_week, end_of_week)
 
+    async def get_upcoming_events(self, days: int = 7) -> list[dict]:
+        """今日から指定日数分の予定を取得"""
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        end = today + timedelta(days=days)
+        return await self._get_events_between(today, end)
+
+    async def _get_events_between(self, start: datetime, end: datetime) -> list[dict]:
+        """指定期間の予定を取得"""
         service = self._build_service()
         if not service:
             return []
@@ -78,8 +86,8 @@ class CalendarService:
                 service.events()
                 .list(
                     calendarId="primary",
-                    timeMin=start_of_week.isoformat() + "Z",
-                    timeMax=end_of_week.isoformat() + "Z",
+                    timeMin=start.isoformat() + "Z",
+                    timeMax=end.isoformat() + "Z",
                     singleEvents=True,
                     orderBy="startTime",
                 )
@@ -213,26 +221,49 @@ class CalendarService:
             )
         return events
 
-    def format_events_for_display(self, events: list[dict]) -> str:
-        """イベントリストを表示用テキストに変換"""
+    def format_events_for_display(self, events: list[dict], show_date: bool = False) -> str:
+        """イベントリストを表示用テキストに変換
+
+        Args:
+            show_date: Trueなら日付も表示（複数日にまたがる場合に使用）
+        """
         if not events:
             return "予定はありません。"
 
+        weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
         lines = []
+        current_date_str = ""
+
         for event in events:
             if event["all_day"]:
-                lines.append(f"• {event['title']}（終日）")
+                if show_date:
+                    try:
+                        d = datetime.fromisoformat(event["start"])
+                        date_label = f"{d.month}/{d.day}({weekday_names[d.weekday()]})"
+                        if date_label != current_date_str:
+                            current_date_str = date_label
+                            lines.append(f"\n📆 {date_label}")
+                    except ValueError:
+                        pass
+                lines.append(f"  • {event['title']}（終日）")
             else:
                 try:
                     start_dt = datetime.fromisoformat(event["start"])
                     end_dt = datetime.fromisoformat(event["end"])
+
+                    if show_date:
+                        date_label = f"{start_dt.month}/{start_dt.day}({weekday_names[start_dt.weekday()]})"
+                        if date_label != current_date_str:
+                            current_date_str = date_label
+                            lines.append(f"\n📆 {date_label}")
+
                     lines.append(
-                        f"• {start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')} {event['title']}"
+                        f"  • {start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')} {event['title']}"
                     )
                 except ValueError:
-                    lines.append(f"• {event['title']}")
+                    lines.append(f"  • {event['title']}")
 
-        return "\n".join(lines)
+        return "\n".join(lines).strip()
 
 
 calendar_service = CalendarService()

@@ -12,7 +12,7 @@ from config.settings import settings
 
 # アプリケーションに必要なスコープ
 # ここでは Google Calendar の予定を読み書きする権限を要求します
-SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
+SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 
 def main() -> None:
