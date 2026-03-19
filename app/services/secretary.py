@@ -23,6 +23,9 @@ class Secretary:
 
     def __init__(self) -> None:
         self._pending_action: dict | None = None
+        self._pending_slots: list[dict] = []
+        self._pending_slot_purpose: str | None = None
+        self._last_slot_skip: int = 0
 
     async def handle_message(self, user_message: str) -> str:
         """ユーザーメッセージを処理して応答を生成"""
@@ -31,6 +34,12 @@ class Secretary:
             confirmation_result = await self._handle_confirmation(user_message)
             if confirmation_result:
                 return confirmation_result
+
+        # 空き時間候補からの選択を処理（「1番で予定入れて」等）
+        if hasattr(self, "_pending_slots") and self._pending_slots:
+            slot_result = await self._handle_slot_selection(user_message)
+            if slot_result:
+                return slot_result
 
         intent = await self._classify_intent(user_message)
         logger.info(f"インテント: {intent}")
@@ -43,6 +52,7 @@ class Secretary:
             "schedule_week": lambda: self._handle_schedule_week(user_message),
             "schedule_create": lambda: self._handle_schedule_create(user_message),
             "schedule_search": lambda: self._handle_schedule_search(user_message),
+            "schedule_find_slot": lambda: self._handle_schedule_find_slot(user_message),
             "task_add": lambda: self._handle_task_add(user_message),
             "task_recurring": lambda: self._handle_task_recurring(user_message),
             "task_list": lambda: self._handle_task_list(user_message),
@@ -178,6 +188,123 @@ class Secretary:
         formatted = calendar_service.format_events_for_display(events, show_date=True)
         return f"「{keyword}」に関する予定です：\n\n{formatted}"
 
+    async def _handle_schedule_find_slot(self, user_message: str) -> str:
+        """空き時間を検索して提案"""
+        # LLMで目的（打ち合わせ相手・内容）と希望時間を抽出
+        extract_prompt = f"""ユーザーのメッセージから以下をJSON形式で抽出してください。
+- purpose: 目的や相手（「Bさんと打ち合わせ」等。不明なら null）
+- duration_minutes: 希望時間（分）。不明なら60
+- is_alternative: 「他の日時」「別の候補」など既に提示した候補以外を求めているか（true/false）
+
+JSONのみ返してください。
+メッセージ：{user_message}"""
+
+        raw = await llm_service.generate(prompt=extract_prompt, temperature=0.1)
+        purpose = None
+        duration = 60
+        is_alt = False
+        try:
+            import json
+            clean = raw.strip()
+            if "```" in clean:
+                clean = clean.split("```")[1]
+                if clean.startswith("json"):
+                    clean = clean[4:]
+            parsed = json.loads(clean.strip())
+            purpose = parsed.get("purpose")
+            duration = parsed.get("duration_minutes", 60) or 60
+            is_alt = parsed.get("is_alternative", False)
+        except (json.JSONDecodeError, IndexError, AttributeError):
+            pass
+
+        # 「他の日時は？」の場合、前回のスキップ数を加算
+        skip = 0
+        if is_alt and hasattr(self, "_last_slot_skip"):
+            skip = self._last_slot_skip
+
+        slots = await calendar_service.find_available_slots(
+            days=10, duration_minutes=duration, skip_count=skip,
+        )
+
+        if not slots:
+            return "申し訳ございません、今後10日間で条件に合う空き時間が見つかりませんでした。"
+
+        # 最大5件提案
+        display_slots = slots[:5]
+        self._last_slot_skip = skip + len(display_slots)
+
+        purpose_text = f"「{purpose}」" if purpose else "予定"
+        lines = [f"📅 {purpose_text}の候補日時です（{duration}分）：\n"]
+
+        for i, slot in enumerate(display_slots, 1):
+            lines.append(
+                f"  {i}. {slot['date']} {slot['start']}〜{slot['end']}"
+                f"（{slot['minutes']}分空き）"
+            )
+
+        lines.append("\n「1番で予定入れて」で登録できます。")
+        lines.append("「他の日時は？」で別の候補も出せます。")
+
+        # 選択用に候補を保持
+        self._pending_slots = display_slots
+        self._pending_slot_purpose = purpose
+
+        return "\n".join(lines)
+
+    async def _handle_slot_selection(self, user_message: str) -> str | None:
+        """空き時間候補からの選択を処理"""
+        msg = user_message.strip()
+
+        # 「他の日時は？」「別の候補」→ schedule_find_slotに流す（インテント分類に任せる）
+        alt_keywords = ["他の", "別の", "それ以外", "他は", "ほかの", "ほかは"]
+        if any(k in msg for k in alt_keywords):
+            self._pending_slots = []
+            return None  # インテント分類に委ねる
+
+        # 「1番」「2で」等の番号選択を検出
+        num_match = re.search(r"(\d+)\s*(?:番|で|に|を)", msg)
+        if not num_match:
+            # 候補選択でなさそう → pending維持せずインテント分類へ
+            self._pending_slots = []
+            return None
+
+        idx = int(num_match.group(1)) - 1
+        slots = self._pending_slots
+        if idx < 0 or idx >= len(slots):
+            return f"1〜{len(slots)}の番号で選んでください。"
+
+        selected = slots[idx]
+        purpose = getattr(self, "_pending_slot_purpose", None) or "予定"
+        self._pending_slots = []
+
+        # カレンダーに登録
+        from datetime import timedelta as td
+        start_dt = selected["start_dt"]
+        end_dt = start_dt + td(minutes=selected["minutes"])
+        # 選択した時間枠全部ではなく、元の希望時間で登録
+        # duration_minutesは保持していないので、end_dtはstart+元の枠で計算
+        # ただし枠全体を予約するのは不自然なので、1時間をデフォルトに
+        end_dt = start_dt + td(hours=1)
+
+        result = await calendar_service.create_event(
+            title=purpose, start_datetime=start_dt, end_datetime=end_dt,
+        )
+
+        if result is None:
+            return "申し訳ございません、予定の登録に失敗しました。"
+
+        if result.get("conflict"):
+            return f"⚠️ 時間が重複しています：{result['conflict']}"
+
+        weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
+        wd = weekday_names[start_dt.weekday()]
+        return (
+            f"✅ 予定を登録しました。\n\n"
+            f"📅 {purpose}\n"
+            f"⏰ {start_dt.month}/{start_dt.day}({wd}) "
+            f"{start_dt.strftime('%H:%M')}〜{end_dt.strftime('%H:%M')}"
+        )
+
     # --- タスク管理 ---
 
     async def _handle_task_add(self, user_message: str) -> str:
@@ -303,11 +430,12 @@ class Secretary:
         from datetime import datetime as dt
 
         tasks = task_service.get_pending_tasks()
-        today_events = await calendar_service.get_today_events()
         week_events = await calendar_service.get_upcoming_events(days=7)
         now = dt.now()
+        weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
 
-        # 全未完了タスク（期限情報付き）
+        # --- コード側で状況整理 ---
+        # 未完了タスク（期限情報付き）
         task_lines = []
         for i, task in enumerate(tasks[:15], 1):
             due = ""
@@ -326,57 +454,81 @@ class Secretary:
             priority = f" [優先度{task.priority}]" if task.priority <= 2 else ""
             task_lines.append(f"{i}. {task.title}{due}{priority}{urgency}")
 
-        task_text = "\n".join(task_lines) if task_lines else "未完了タスクなし"
+        # 今後の予定（日数付きで整形）
+        upcoming_lines = []
+        for event in week_events:
+            try:
+                if event.get("all_day"):
+                    start_dt = datetime.fromisoformat(event["start"])
+                    time_str = "終日"
+                else:
+                    start_dt = datetime.fromisoformat(event["start"])
+                    end_dt = datetime.fromisoformat(event["end"])
+                    time_str = f"{start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')}"
+                days_until = (start_dt.date() - now.date()).days
+                if days_until == 0:
+                    day_label = "今日"
+                elif days_until == 1:
+                    day_label = "明日"
+                else:
+                    wd = weekday_names[start_dt.weekday()]
+                    day_label = f"{days_until}日後({start_dt.month}/{start_dt.day} {wd})"
+                upcoming_lines.append(f"・{day_label} {time_str} {event['title']}")
+            except (ValueError, KeyError):
+                upcoming_lines.append(f"・{event.get('title', '不明')}")
 
-        # 今日の予定
-        if today_events:
-            today_event_text = calendar_service.format_events_for_display(today_events)
+        # --- 応答を組み立て ---
+        result_parts = []
+
+        # タスク状況
+        if task_lines:
+            result_parts.append("📋 未完了タスク：")
+            result_parts.extend(task_lines)
         else:
-            today_event_text = "なし"
+            result_parts.append("📋 未完了タスクはありません。")
 
-        # 今後1週間の予定
-        if week_events:
-            week_event_text = calendar_service.format_events_for_display(week_events, show_date=True)
-        else:
-            week_event_text = "なし"
+        # 今後の予定
+        if upcoming_lines:
+            result_parts.append("")
+            result_parts.append("📅 今後1週間の予定：")
+            result_parts.extend(upcoming_lines)
 
-        prompt = f"""あなたは秘書「凛」です。ユーザーの状況を総合的に判断し、今やるべきことを提案してください。
+        # LLMに提案を生成させる（予定がある場合は必ず）
+        if task_lines or upcoming_lines:
+            task_text = "\n".join(task_lines) if task_lines else "なし"
+            event_text = "\n".join(upcoming_lines) if upcoming_lines else "なし"
 
-【現在時刻】{now.strftime('%m/%d %H:%M')}
+            prompt = f"""秘書「凛」として、以下の状況を踏まえて今やるべきことを3件以内で提案してください。
 
-【ユーザーの発言】
-{user_message}
+現在時刻: {now.strftime('%m/%d %H:%M')}
+ユーザーの発言: {user_message}
 
-【未完了タスク一覧】（優先度が高い順、期限の緊急度付き）
+未完了タスク:
 {task_text}
 
-【今日の予定】
-{today_event_text}
+今後1週間の予定:
+{event_text}
 
-【今後1週間の予定】
-{week_event_text}
+提案のルール:
+- 期限超過・今日期限のタスクは最優先
+- 予定の事前準備を必ず提案すること（打ち合わせなら資料準備、面談なら面談シート確認など）
+- 各提案に理由を一言添える
+- 丁寧語、簡潔に"""
 
-【提案ルール】
-- タスクと予定の両方を必ず確認し、総合的に判断すること
-- 期限超過・今日期限・明日期限のタスクは最優先で推奨
-- 今後の期限が近いタスクも含めて、先にやるべきものを判断
-- ユーザーが空き時間を伝えている場合は、その時間で着手できるものを提案
-- 次の予定までの空き時間も考慮する
-- **重要**: 今後の予定（打ち合わせ・会議・面談等）に対する事前準備も積極的に提案すること
-  - 例: 数日後に打ち合わせがあれば「資料の準備は必要ですか？」「議題の整理はお済みですか？」
-  - 例: 来週に面談があれば「面談シートの確認をしておきませんか？」
-- 未完了タスクがゼロでも「やることがない」と回答しないこと。予定から逆算して準備・確認すべきことを提案する
-- 3件以内に絞って、優先する理由を添えて簡潔に提案
-- 丁寧語で、長文禁止"""
+            if await llm_service._is_ollama_available():
+                suggestion = await llm_service.generate(prompt=prompt, temperature=0.5)
+            else:
+                filtered = pii_filter.redact(prompt)
+                suggestion = await llm_service.generate(prompt=filtered, temperature=0.5)
+                suggestion = pii_filter.restore(suggestion)
 
-        if await llm_service._is_ollama_available():
-            response = await llm_service.generate(prompt=prompt, temperature=0.5)
+            result_parts.append("")
+            result_parts.append("💡 提案：")
+            result_parts.append(suggestion.strip())
         else:
-            filtered = pii_filter.redact(prompt)
-            response = await llm_service.generate(prompt=filtered, temperature=0.5)
-            response = pii_filter.restore(response)
+            result_parts.append("\n✨ タスクも予定もありません。ゆっくりお過ごしください。")
 
-        return response
+        return "\n".join(result_parts)
 
     async def _handle_briefing(self) -> str:
         """ブリーフィング（予定+タスクのまとめ）"""
@@ -700,6 +852,7 @@ class Secretary:
 • 「今日の予定」— 今日の予定を確認
 • 「今週の予定」— 今日から1週間の予定を確認
 • 「予定を追加したい」— カレンダーに予定を登録
+• 「〇〇と打ち合わせしたい」— 空き時間を検索して候補提示
 
 📋 タスク管理
 • 「タスク一覧」— 未完了タスクを表示

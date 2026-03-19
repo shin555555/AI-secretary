@@ -300,4 +300,93 @@ class CalendarService:
         return "\n".join(lines).strip()
 
 
+    async def find_available_slots(
+        self,
+        days: int = 5,
+        duration_minutes: int = 60,
+        work_start: int = 9,
+        work_end: int = 17,
+        skip_count: int = 0,
+    ) -> list[dict]:
+        """今後の営業時間内で空いている時間帯を検索
+
+        Args:
+            days: 検索する日数
+            duration_minutes: 必要な時間（分）
+            work_start: 営業開始時（時）
+            work_end: 営業終了時（時）
+            skip_count: 先頭からスキップする候補数（「他の日時」用）
+        """
+        now = datetime.now()
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        events = await self._get_events_between(today, today + timedelta(days=days))
+
+        weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
+        slots = []
+
+        for day_offset in range(days):
+            target_date = today + timedelta(days=day_offset)
+
+            # 土日はスキップ
+            if target_date.weekday() >= 5:
+                continue
+
+            day_start = target_date.replace(hour=work_start, minute=0)
+            day_end = target_date.replace(hour=work_end, minute=0)
+
+            # 今日の場合は現在時刻以降（30分単位に切り上げ）
+            if day_offset == 0:
+                if now >= day_end:
+                    continue
+                if now > day_start:
+                    # 30分単位に切り上げ
+                    minute = now.minute
+                    if minute <= 30:
+                        day_start = now.replace(minute=30, second=0, microsecond=0)
+                    else:
+                        day_start = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+
+            # この日の予定（終日以外）を時系列で取得
+            day_events = []
+            for event in events:
+                if event["all_day"]:
+                    continue
+                try:
+                    e_start = datetime.fromisoformat(event["start"])
+                    e_end = datetime.fromisoformat(event["end"])
+                    if e_start.date() == target_date.date():
+                        day_events.append((e_start, e_end, event["title"]))
+                except ValueError:
+                    continue
+            day_events.sort(key=lambda x: x[0])
+
+            # 空き時間を算出
+            cursor = day_start
+            for e_start, e_end, _ in day_events:
+                if cursor + timedelta(minutes=duration_minutes) <= e_start:
+                    wd = weekday_names[target_date.weekday()]
+                    slots.append({
+                        "date": f"{target_date.month}/{target_date.day}({wd})",
+                        "start": cursor.strftime("%H:%M"),
+                        "end": e_start.strftime("%H:%M"),
+                        "start_dt": cursor,
+                        "minutes": int((e_start - cursor).total_seconds() / 60),
+                    })
+                cursor = max(cursor, e_end)
+
+            # 最後の予定後〜営業終了
+            if cursor + timedelta(minutes=duration_minutes) <= day_end:
+                wd = weekday_names[target_date.weekday()]
+                slots.append({
+                    "date": f"{target_date.month}/{target_date.day}({wd})",
+                    "start": cursor.strftime("%H:%M"),
+                    "end": day_end.strftime("%H:%M"),
+                    "start_dt": cursor,
+                    "minutes": int((day_end - cursor).total_seconds() / 60),
+                })
+
+        # skip_countで先頭をスキップ（「他の日時」用）
+        return slots[skip_count:]
+
+
 calendar_service = CalendarService()
