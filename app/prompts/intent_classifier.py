@@ -8,6 +8,7 @@ INTENT_CLASSIFICATION_PROMPT = """\
 - schedule_today: 今日の予定を確認（例: 「今日の予定」「今日のスケジュール」）
 - schedule_week: 今週・来週の予定を確認（例: 「今週の予定」「来週の予定」）
 - schedule_create: 予定を作成（例: 「明日14時に面談」「毎週月曜に会議」）
+- schedule_search: 特定の予定を検索する（例: 「〇〇の予定っていつ？」「過去の〇〇の会議」「〇〇さんとの打ち合わせ」「〇〇っていつだっけ」）
 - task_add: タスクを追加（例: 「タスク追加：報告書作成」「金曜までに〇〇」）
 - task_recurring: 繰り返しタスクを登録（例: 「国保連請求 毎月7日」）
 - task_list: タスク一覧を確認（例: 「タスク一覧」「今日のタスク」「ルーティン一覧」）
@@ -38,6 +39,7 @@ VALID_INTENTS = [
     "schedule_today",
     "schedule_week",
     "schedule_create",
+    "schedule_search",
     "task_add",
     "task_recurring",
     "task_list",

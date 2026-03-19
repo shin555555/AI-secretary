@@ -42,6 +42,7 @@ class Secretary:
             "schedule_today": lambda: self._handle_schedule_today(),
             "schedule_week": lambda: self._handle_schedule_week(user_message),
             "schedule_create": lambda: self._handle_schedule_create(user_message),
+            "schedule_search": lambda: self._handle_schedule_search(user_message),
             "task_add": lambda: self._handle_task_add(user_message),
             "task_recurring": lambda: self._handle_task_recurring(user_message),
             "task_list": lambda: self._handle_task_list(user_message),
@@ -128,6 +129,11 @@ class Secretary:
 
     async def _handle_schedule_create(self, user_message: str) -> str:
         """予定を作成する"""
+        # リッチメニューからの短い入力は聞き返す
+        short_phrases = ["予定を追加", "予定を追加したい", "予定追加", "予定の追加", "予定を登録", "予定登録"]
+        if user_message.strip() in short_phrases:
+            return "予定の登録ですね。どのような予定を追加しますか？\n（例：「明日14時から1時間、田中さんと面談」「毎週月曜10時に朝礼」）"
+
         parsed = await parse_schedule_from_message(user_message)
         if not parsed:
             return "予定の内容を読み取れませんでした。もう少し詳しく教えていただけますか？\n例：「明日14時から1時間、田中さんと面談」"
@@ -138,7 +144,7 @@ class Secretary:
         rrule = parsed.get("rrule")
 
         if not start:
-            return "日時を読み取れませんでした。具体的な日時を含めて教えてください。\n例：「3月20日15時から打ち合わせ」"
+            return "日時の指定が見当たりません。いつの予定か教えていただけますか？\n例：「3月20日15時から打ち合わせ」"
 
         result = await calendar_service.create_event(
             title=title, start_datetime=start, end_datetime=end, rrule=rrule,
@@ -153,6 +159,24 @@ class Secretary:
 
         repeat_note = f"（{rrule} で繰り返し）" if rrule else ""
         return f"✅ 予定を登録しました{repeat_note}\n\n📅 {title}\n⏰ {result.get('start', start)}"
+
+    async def _handle_schedule_search(self, user_message: str) -> str:
+        """キーワードで予定を検索"""
+        # LLMでキーワードを抽出
+        extract_prompt = f"ユーザーのメッセージから、検索したい予定のキーワード（人名や会議名など）だけを抽出して単語で返してください。説明不要、キーワードのみ。\nメッセージ：{user_message}"
+        keyword = await llm_service.generate(prompt=extract_prompt, temperature=0.1)
+        keyword = keyword.strip().strip("「」『』\"'")
+
+        if not keyword:
+            return "検索キーワードを読み取れませんでした。何の予定を探していますか？"
+
+        events = await calendar_service.search_events(keyword)
+
+        if not events:
+            return f"「{keyword}」に関する予定は見つかりませんでした。"
+
+        formatted = calendar_service.format_events_for_display(events, show_date=True)
+        return f"「{keyword}」に関する予定です：\n\n{formatted}"
 
     # --- タスク管理 ---
 

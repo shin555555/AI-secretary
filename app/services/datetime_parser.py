@@ -69,9 +69,9 @@ def _resolve_date(raw: str | None) -> datetime | None:
             days_ahead = (target_weekday - now.weekday()) % 7 + 7
             return today + timedelta(days=days_ahead)
 
-    # 「X曜」「X曜日」
-    for label, weekday_num in WEEKDAY_MAP.items():
-        if label in raw:
+    # 「X曜」「X曜日」（「X日」との誤マッチを防ぐため、数字直後の「日」は除外）
+    for label, weekday_num in sorted(WEEKDAY_MAP.items(), key=lambda x: len(x[0]), reverse=True):
+        if label in raw and not re.search(r"\d" + re.escape(label), raw):
             days_ahead = (weekday_num - now.weekday()) % 7
             if days_ahead == 0:
                 return today

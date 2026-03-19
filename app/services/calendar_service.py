@@ -91,8 +91,8 @@ class CalendarService:
                 service.events()
                 .list(
                     calendarId="primary",
-                    timeMin=start.isoformat() + "Z",
-                    timeMax=end.isoformat() + "Z",
+                    timeMin=start.isoformat() + "+09:00",
+                    timeMax=end.isoformat() + "+09:00",
                     singleEvents=True,
                     orderBy="startTime",
                 )
@@ -118,8 +118,8 @@ class CalendarService:
                 service.events()
                 .list(
                     calendarId="primary",
-                    timeMin=target.isoformat() + "Z",
-                    timeMax=next_day.isoformat() + "Z",
+                    timeMin=target.isoformat() + "+09:00",
+                    timeMax=next_day.isoformat() + "+09:00",
                     singleEvents=True,
                     orderBy="startTime",
                 )
@@ -181,6 +181,35 @@ class CalendarService:
             logger.error(f"予定作成エラー: {e}")
             return None
 
+    async def search_events(self, query: str) -> list[dict]:
+        """キーワードで予定を検索（過去半年〜未来半年）"""
+        service = self._build_service()
+        if not service:
+            return []
+
+        now = datetime.now()
+        time_min = (now - timedelta(days=180)).replace(hour=0, minute=0, second=0, microsecond=0)
+        time_max = (now + timedelta(days=180)).replace(hour=23, minute=59, second=59, microsecond=0)
+
+        try:
+            result = (
+                service.events()
+                .list(
+                    calendarId="primary",
+                    q=query,
+                    timeMin=time_min.isoformat() + "+09:00",
+                    timeMax=time_max.isoformat() + "+09:00",
+                    singleEvents=True,
+                    orderBy="startTime",
+                    maxResults=20,
+                )
+                .execute()
+            )
+            return self._parse_events(result.get("items", []))
+        except HttpError as e:
+            logger.error(f"予定検索エラー: {e}")
+            return []
+
     async def _check_conflicts(
         self, start: datetime, end: datetime
     ) -> list[dict]:
@@ -194,8 +223,8 @@ class CalendarService:
                 service.events()
                 .list(
                     calendarId="primary",
-                    timeMin=start.isoformat() + "Z",
-                    timeMax=end.isoformat() + "Z",
+                    timeMin=start.isoformat() + "+09:00",
+                    timeMax=end.isoformat() + "+09:00",
                     singleEvents=True,
                 )
                 .execute()
