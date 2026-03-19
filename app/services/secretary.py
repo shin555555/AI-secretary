@@ -48,7 +48,7 @@ class Secretary:
             "task_list": lambda: self._handle_task_list(user_message),
             "task_done": lambda: self._handle_task_done(user_message),
             "task_delete": lambda: self._handle_task_delete(user_message),
-            "task_priority": lambda: self._handle_task_priority(),
+            "task_priority": lambda: self._handle_task_priority(user_message),
             "briefing": lambda: self._handle_briefing(),
             "preference": lambda: self._handle_preference(user_message),
             "mail_check": lambda: self._handle_mail_check(),
@@ -182,6 +182,12 @@ class Secretary:
 
     async def _handle_task_add(self, user_message: str) -> str:
         """タスクを追加"""
+        # リッチメニューや短い抽象的な指示の場合は聞き返す
+        short_patterns = ["タスク追加", "タスクを追加", "タスク登録", "タスクを登録", "タスクを追加したい", "タスク追加したい"]
+        cleaned = user_message.strip()
+        if any(cleaned == p or cleaned == p + "して" or cleaned == p + "する" for p in short_patterns):
+            return "タスクの追加ですね。どんなタスクを追加しますか？\n（例：「報告書作成 金曜まで」「国保連請求の準備」）"
+
         parsed = await parse_task_from_message(user_message)
         if not parsed:
             return "タスクの内容を読み取れませんでした。\n例：「タスク追加：報告書作成 金曜まで」"
@@ -292,22 +298,85 @@ class Secretary:
 
         return "該当するタスクが見つかりませんでした。「タスク一覧」で確認してから「〇〇を削除して」と指定してください。"
 
-    async def _handle_task_priority(self) -> str:
-        """優先タスクを提案"""
+    async def _handle_task_priority(self, user_message: str) -> str:
+        """空き時間・予定・タスクを総合的に判断して提案"""
+        from datetime import datetime as dt
+
         tasks = task_service.get_pending_tasks()
-        if not tasks:
-            return "未完了のタスクはありません。素晴らしいですね！"
+        today_events = await calendar_service.get_today_events()
+        week_events = await calendar_service.get_upcoming_events(days=7)
+        now = dt.now()
 
-        # 上位3件を提案
-        top_tasks = tasks[:3]
-        lines = ["次に取り組むべきタスクの提案です：\n"]
-        for i, task in enumerate(top_tasks, 1):
+        # 全未完了タスク（期限情報付き）
+        task_lines = []
+        for i, task in enumerate(tasks[:15], 1):
             due = ""
+            urgency = ""
             if task.due_date:
-                due = f"（期限: {task.due_date.strftime('%m/%d')}）"
-            lines.append(f"{i}. {task.title}{due}")
+                days_left = (task.due_date.date() - now.date()).days
+                due = f" (期限: {task.due_date.strftime('%m/%d')})"
+                if days_left < 0:
+                    urgency = " 【期限超過！】"
+                elif days_left == 0:
+                    urgency = " 【今日期限】"
+                elif days_left == 1:
+                    urgency = " 【明日期限】"
+                elif days_left <= 3:
+                    urgency = f" 【あと{days_left}日】"
+            priority = f" [優先度{task.priority}]" if task.priority <= 2 else ""
+            task_lines.append(f"{i}. {task.title}{due}{priority}{urgency}")
 
-        return "\n".join(lines)
+        task_text = "\n".join(task_lines) if task_lines else "未完了タスクなし"
+
+        # 今日の予定
+        if today_events:
+            today_event_text = calendar_service.format_events_for_display(today_events)
+        else:
+            today_event_text = "なし"
+
+        # 今後1週間の予定
+        if week_events:
+            week_event_text = calendar_service.format_events_for_display(week_events, show_date=True)
+        else:
+            week_event_text = "なし"
+
+        prompt = f"""あなたは秘書「凛」です。ユーザーの状況を総合的に判断し、今やるべきことを提案してください。
+
+【現在時刻】{now.strftime('%m/%d %H:%M')}
+
+【ユーザーの発言】
+{user_message}
+
+【未完了タスク一覧】（優先度が高い順、期限の緊急度付き）
+{task_text}
+
+【今日の予定】
+{today_event_text}
+
+【今後1週間の予定】
+{week_event_text}
+
+【提案ルール】
+- タスクと予定の両方を必ず確認し、総合的に判断すること
+- 期限超過・今日期限・明日期限のタスクは最優先で推奨
+- 今後の期限が近いタスクも含めて、先にやるべきものを判断
+- ユーザーが空き時間を伝えている場合は、その時間で着手できるものを提案
+- 次の予定までの空き時間も考慮する
+- **重要**: 今後の予定（打ち合わせ・会議・面談等）に対する事前準備も積極的に提案すること
+  - 例: 数日後に打ち合わせがあれば「資料の準備は必要ですか？」「議題の整理はお済みですか？」
+  - 例: 来週に面談があれば「面談シートの確認をしておきませんか？」
+- 未完了タスクがゼロでも「やることがない」と回答しないこと。予定から逆算して準備・確認すべきことを提案する
+- 3件以内に絞って、優先する理由を添えて簡潔に提案
+- 丁寧語で、長文禁止"""
+
+        if await llm_service._is_ollama_available():
+            response = await llm_service.generate(prompt=prompt, temperature=0.5)
+        else:
+            filtered = pii_filter.redact(prompt)
+            response = await llm_service.generate(prompt=filtered, temperature=0.5)
+            response = pii_filter.restore(response)
+
+        return response
 
     async def _handle_briefing(self) -> str:
         """ブリーフィング（予定+タスクのまとめ）"""
