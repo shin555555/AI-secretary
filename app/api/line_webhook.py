@@ -7,6 +7,7 @@ from linebot.v3.messaging import (
     Configuration,
     MessagingApi,
     ReplyMessageRequest,
+    ShowLoadingAnimationRequest,
     TextMessage,
 )
 from linebot.v3.webhook import WebhookParser
@@ -52,7 +53,21 @@ async def line_webhook(
         user_message = event.message.text
         logger.info(f"受信: {user_message[:50]}")
 
-        # Phase 2: 凛（AI秘書）が応答を生成
+        # Loadingアニメーション表示（LLM処理中の「考え中」表示）
+        # 返信メッセージ送信時に自動で消える。失敗しても処理は継続。
+        try:
+            with ApiClient(configuration) as api_client:
+                messaging_api = MessagingApi(api_client)
+                messaging_api.show_loading_animation(
+                    ShowLoadingAnimationRequest(
+                        chat_id=user_id,
+                        loading_seconds=20,
+                    )
+                )
+        except Exception as e:
+            logger.warning(f"Loadingアニメーション表示失敗（処理は継続）: {e}")
+
+        # 凛（AI秘書）が応答を生成
         try:
             reply_text = await secretary.handle_message(user_message)
         except Exception as e:
