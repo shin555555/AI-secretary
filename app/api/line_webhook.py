@@ -74,13 +74,16 @@ async def line_webhook(
             logger.error(f"応答生成エラー: {e}")
             reply_text = "申し訳ございません、処理中にエラーが発生しました。もう一度お試しください。"
 
-        with ApiClient(configuration) as api_client:
-            messaging_api = MessagingApi(api_client)
-            messaging_api.reply_message(
-                ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text=reply_text)],
+        try:
+            with ApiClient(configuration) as api_client:
+                messaging_api = MessagingApi(api_client)
+                messaging_api.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=reply_text)],
+                    )
                 )
-            )
+        except Exception as e:
+            logger.error(f"LINE返信送信エラー: {e}")
 
     return {"status": "ok"}
