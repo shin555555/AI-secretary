@@ -1,6 +1,6 @@
 # 実装進捗
 
-最終更新: 2026-03-19（doc-sync）
+最終更新: 2026-03-23（doc-sync）
 
 ## フェーズ一覧
 
@@ -84,6 +84,8 @@
 - [x] start_server.bat / stop_server.bat（英語版、エンコーディング問題対応済み）
 - [x] Quick Tunnel + LINE Webhook URL自動更新（scripts/start_tunnel.py）
 - [x] SQLCipher暗号化DB導入（AES-256、キーはWindows資格情報マネージャーで管理）
+- [x] トンネル死活監視・自動復旧（startup.py: 60秒ごとプロセス監視、5分ごとWebhook疎通チェック）
+- [x] 深夜0時自動スリープ（タスクスケジューラ: RinAISecretary-SleepAt0）
 - [ ] 手動テスト全項目クリア（docs/testing.md 参照）
 
 ---
@@ -179,5 +181,14 @@
 - **タスク優先提案強化**: 今日のタスク/予定だけでなく7日間スコープ、予定からの先回り準備提案を追加
 - **空き時間検索・日程調整**: `find_available_slots()` で営業時間内の空きを算出、候補提示→番号選択→登録のフロー実装
 - **コードレビュー実施**: PIIフィルタ漏れ（Critical）、1時間ハードコード、30分丸めエッジケースを修正
+
+### 2026-03-23（安定性修正・自動化強化）
+- **バグ修正1**: `BackgroundScheduler()` にタイムゾーン未指定 → UTC基準で曜日判定がずれ土日にもブリーフィングが送信されていた → `BackgroundScheduler(timezone="Asia/Tokyo")` に修正
+- **バグ修正2**: `calendar_service.create_event()` で `fromisoformat()` が `ValueError` を投げた際に `str` 型のまま `isoformat()` を呼んでエラー → `try/except ValueError` でキャッチし `None` 返却に修正
+- **安定化**: `start_tunnel.py` のヘルスチェックをローカル優先に変更 — DNS未解決（`getaddrinfo failed`）でもWebhook URL更新に進めるよう修正
+- **自動復旧強化**: `startup.py` にトンネル死活監視ループを追加 — 60秒ごとプロセス生死確認・自動再起動、5分ごとLINE APIでWebhook疎通テスト・失敗時はトンネル再起動
+- **深夜スリープ**: `scripts/sleep_server.bat` 新規作成、タスクスケジューラ `RinAISecretary-SleepAt0`（毎日0:00）登録 → サーバー停止+PCスリープ
+- **cloudflaredサービス無効化**: サービス版cloudflaredとコンソール版の競合が原因でWebhookが530エラーになっていた → `sc config cloudflared start= disabled` で無効化
+- **タスクスケジューラ改善**: `setup_scheduler.ps1` をパスワード不要（S4U/Interactive方式）に変更、SleepAt0タスクを追加
 
 _（開発中に発生した問題・決定事項をここに記録）_
