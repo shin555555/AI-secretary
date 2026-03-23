@@ -143,10 +143,14 @@ class CalendarService:
             return None
 
         # 文字列ならdatetimeに変換
-        if isinstance(start_datetime, str):
-            start_datetime = datetime.fromisoformat(start_datetime)
-        if isinstance(end_datetime, str):
-            end_datetime = datetime.fromisoformat(end_datetime)
+        try:
+            if isinstance(start_datetime, str):
+                start_datetime = datetime.fromisoformat(start_datetime)
+            if isinstance(end_datetime, str):
+                end_datetime = datetime.fromisoformat(end_datetime)
+        except ValueError as e:
+            logger.error(f"日時変換失敗: {e}")
+            return None
         if end_datetime is None:
             end_datetime = start_datetime + timedelta(hours=1)
 

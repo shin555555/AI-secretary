@@ -13,7 +13,7 @@ from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-scheduler = BackgroundScheduler()
+scheduler = BackgroundScheduler(timezone="Asia/Tokyo")
 
 
 def _setup_scheduler() -> None:
@@ -24,10 +24,11 @@ def _setup_scheduler() -> None:
         morning_briefing,
     )
 
-    # 朝ブリーフィング
+    # 朝ブリーフィング（平日のみ）
     scheduler.add_job(
         morning_briefing,
         "cron",
+        day_of_week="mon-fri",
         hour=settings.briefing_hour,
         minute=settings.briefing_minute,
         id="morning_briefing",

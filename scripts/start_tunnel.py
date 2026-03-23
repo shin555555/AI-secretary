@@ -54,6 +54,28 @@ def update_line_webhook(tunnel_url: str, token: str) -> bool:
         return False
 
 
+def verify_webhook(tunnel_url: str, token: str) -> bool:
+    """LINE Webhook URLが正しく設定されたか検証"""
+    try:
+        resp = httpx.get(
+            "https://api.line.me/v2/bot/channel/webhook/endpoint",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            current = resp.json().get("endpoint", "")
+            expected = f"{tunnel_url}{WEBHOOK_PATH}"
+            if current == expected:
+                print(f"[OK] Webhook URL verified: {current}")
+                return True
+            else:
+                print(f"[ERROR] Webhook URL mismatch! expected={expected}, actual={current}")
+                return False
+    except Exception as e:
+        print(f"[WARN] Webhook verification failed: {e}")
+    return False
+
+
 def main() -> None:
     token = get_line_token()
     if not token:
@@ -90,20 +112,55 @@ def main() -> None:
                 sys.exit(1)
 
         if tunnel_url:
-            # Wait for tunnel to be fully ready, then retry
-            for attempt in range(3):
-                print(f"[INFO] Waiting for tunnel to stabilize (attempt {attempt + 1}/3)...")
-                time.sleep(5)
+            webhook_updated = False
 
+            for attempt in range(5):
+                wait_sec = 3 + attempt * 2
+                print(f"[INFO] Waiting {wait_sec}s for tunnel to stabilize (attempt {attempt + 1}/5)...")
+                time.sleep(wait_sec)
+
+                # health check（ローカル→トンネル経由の順で確認）
                 try:
-                    httpx.get(f"{tunnel_url}/health", timeout=5)
-                except Exception:
+                    local_resp = httpx.get(f"{LOCAL_URL}/health", timeout=5)
+                    if local_resp.status_code != 200:
+                        print(f"[WARN] Local health check returned {local_resp.status_code}, retrying...")
+                        continue
+                except Exception as e:
+                    print(f"[WARN] Local health check failed: {e}, retrying...")
                     continue
 
+                try:
+                    resp = httpx.get(f"{tunnel_url}/health", timeout=10)
+                    if resp.status_code != 200:
+                        print(f"[WARN] Tunnel health check returned {resp.status_code}, retrying...")
+                        continue
+                except Exception as e:
+                    print(f"[WARN] Tunnel health check failed: {e} (DNS may not be ready, proceeding anyway)")
+
+                print("[OK] Health check passed")
+
+                # webhook URL更新
                 if update_line_webhook(tunnel_url, token):
-                    break
-            else:
-                print("[WARN] Could not update LINE webhook. Update manually in LINE Developers console.")
+                    # 更新後に検証
+                    if verify_webhook(tunnel_url, token):
+                        webhook_updated = True
+                        break
+                    else:
+                        print("[WARN] Verification failed, retrying...")
+
+            if not webhook_updated:
+                print("")
+                print("=" * 60)
+                print("[CRITICAL] LINE Webhook URL の更新に失敗しました！")
+                print("LINE からのメッセージを受信できません。")
+                print("")
+                print("手動で以下のURLを設定してください:")
+                print(f"  {tunnel_url}{WEBHOOK_PATH}")
+                print("")
+                print("LINE Developers Console:")
+                print("  https://developers.line.biz/console/")
+                print("=" * 60)
+                print("")
 
             print("\n[INFO] Tunnel is running. Press Ctrl+C to stop.")
             # トンネルプロセスを維持

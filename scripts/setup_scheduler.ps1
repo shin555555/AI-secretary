@@ -6,13 +6,6 @@ $ErrorActionPreference = "Stop"
 Write-Host "=== Rin AI Secretary - Scheduler Setup ===" -ForegroundColor Cyan
 Write-Host ""
 
-# --- Password prompt for "Run whether user is logged on or not" ---
-Write-Host "Task Scheduler needs your Windows password to run tasks on lock screen." -ForegroundColor Yellow
-$password = Read-Host "Enter Windows password for user '$env:USERNAME'" -AsSecureString
-$bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($password)
-$plainPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-[System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-
 $pythonExe = "C:\Users\user\Desktop\AI-secretary\.venv\Scripts\pythonw.exe"
 $startupScript = "C:\Users\user\Desktop\AI-secretary\scripts\startup.py"
 $workingDir = "C:\Users\user\Desktop\AI-secretary"
@@ -30,6 +23,8 @@ $action = New-ScheduledTaskAction -Execute $pythonExe -Argument $startupScript -
 
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At 07:30
 
+$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType S4U -RunLevel Highest
+
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
@@ -43,12 +38,10 @@ Register-ScheduledTask `
     -Action $action `
     -Trigger $trigger `
     -Settings $settings `
-    -User $env:USERNAME `
-    -Password $plainPassword `
-    -RunLevel Highest `
+    -Principal $principal `
     -Description "Rin AI Secretary: Wake from sleep and start server at 7:30 on weekdays"
 
-Write-Host "[OK] Task '$taskName' registered (Weekdays 7:30, WakeToRun, runs on lock screen)" -ForegroundColor Green
+Write-Host "[OK] Task '$taskName' registered (Weekdays 7:30, WakeToRun)" -ForegroundColor Green
 
 # --- 2. Start on Logon ---
 $taskNameLogon = "RinAISecretary-OnLogon"
@@ -63,6 +56,8 @@ $actionLogon = New-ScheduledTaskAction -Execute $pythonExe -Argument $startupScr
 
 $triggerLogon = New-ScheduledTaskTrigger -AtLogOn
 
+$principalLogon = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+
 $settingsLogon = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
@@ -75,26 +70,49 @@ Register-ScheduledTask `
     -Action $actionLogon `
     -Trigger $triggerLogon `
     -Settings $settingsLogon `
-    -User $env:USERNAME `
-    -Password $plainPassword `
+    -Principal $principalLogon `
     -Description "Rin AI Secretary: Start server on user logon"
 
 Write-Host "[OK] Task '$taskNameLogon' registered (Start on logon)" -ForegroundColor Green
 
-# --- Clear password from memory ---
-$plainPassword = $null
-[GC]::Collect()
+# --- 3. Sleep at 0:00 ---
+$taskNameSleep = "RinAISecretary-SleepAt0"
+$existingSleep = Get-ScheduledTask -TaskName $taskNameSleep -ErrorAction SilentlyContinue
+
+if ($existingSleep) {
+    Write-Host "Removing existing task '$taskNameSleep'..." -ForegroundColor Yellow
+    Unregister-ScheduledTask -TaskName $taskNameSleep -Confirm:$false
+}
+
+$sleepScript = "C:\Users\user\Desktop\AI-secretary\scripts\sleep_server.bat"
+$actionSleep = New-ScheduledTaskAction -Execute $sleepScript -WorkingDirectory $workingDir
+
+$triggerSleep = New-ScheduledTaskTrigger -Daily -At 00:00
+
+$principalSleep = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType S4U -RunLevel Highest
+
+$settingsSleep = New-ScheduledTaskSettingsSet `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 5) `
+    -MultipleInstances IgnoreNew
+
+Register-ScheduledTask `
+    -TaskName $taskNameSleep `
+    -Action $actionSleep `
+    -Trigger $triggerSleep `
+    -Settings $settingsSleep `
+    -Principal $principalSleep `
+    -Description "Rin AI Secretary: Stop server and sleep PC at midnight"
+
+Write-Host "[OK] Task '$taskNameSleep' registered (Daily 0:00, stop + sleep)" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "=== Setup Complete ===" -ForegroundColor Cyan
-Write-Host "1. Weekday 7:30 - Wake from sleep + start server (runs on lock screen)" -ForegroundColor White
+Write-Host "1. Weekday 7:30 - Wake from sleep + start server" -ForegroundColor White
 Write-Host "2. On logon - Auto start server" -ForegroundColor White
-Write-Host ""
-Write-Host "Key changes from previous version:" -ForegroundColor Gray
-Write-Host "  - Uses startup.py (headless, no GUI windows)" -ForegroundColor Gray
-Write-Host "  - Uses pythonw.exe (no console window)" -ForegroundColor Gray
-Write-Host "  - 'Run whether user is logged on or not' enabled" -ForegroundColor Gray
-Write-Host "  - MultipleInstances: IgnoreNew (prevents duplicate starts)" -ForegroundColor Gray
+Write-Host "3. Daily 0:00 - Stop server + sleep PC" -ForegroundColor White
 Write-Host ""
 Write-Host "Verify: taskschd.msc -> search 'RinAISecretary'" -ForegroundColor Gray
 Write-Host "Manual start: scripts\start_server.bat" -ForegroundColor Gray
