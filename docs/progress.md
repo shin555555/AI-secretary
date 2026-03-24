@@ -86,7 +86,7 @@
 - [x] SQLCipher暗号化DB導入（AES-256、キーはWindows資格情報マネージャーで管理）
 - [x] トンネル死活監視・自動復旧（startup.py: 60秒ごとプロセス監視、5分ごとWebhook疎通チェック）
 - [x] 深夜0時自動スリープ（タスクスケジューラ: RinAISecretary-SleepAt0）
-- [ ] 手動テスト全項目クリア（docs/testing.md 参照）
+- [x] 手動テスト Phase 1〜5 クリア（docs/testing.md 参照、2026-03-24 完了）
 
 ---
 
@@ -190,5 +190,11 @@
 - **深夜スリープ**: `scripts/sleep_server.bat` 新規作成、タスクスケジューラ `RinAISecretary-SleepAt0`（毎日0:00）登録 → サーバー停止+PCスリープ
 - **cloudflaredサービス無効化**: サービス版cloudflaredとコンソール版の競合が原因でWebhookが530エラーになっていた → `sc config cloudflared start= disabled` で無効化
 - **タスクスケジューラ改善**: `setup_scheduler.ps1` をパスワード不要（S4U/Interactive方式）に変更、SleepAt0タスクを追加
+
+### 2026-03-24（手動テスト Phase 4〜5 完了・設定反映機能修正）
+- **手動テスト完了**: Phase 4（タスク管理）全項目 + Phase 5（パーソナライズ）全項目クリア
+- **バグ修正3**: 設定検索時に保存済み設定が反映されない問題 → `_handle_schedule_search()` で見つからない場合に設定確認・`_handle_general()` でも設定をコンテキストに注入するよう修正
+- **機能改善**: 「レセはいつだっけ？」のような質問で、カレンダーに見つからない場合、保存済み設定（「レセは毎月10日まで」等）を表示するよう拡張
+- **汎用会話強化**: `_handle_general()` に保存済み設定をプロンプトコンテキストに自動注入 — ユーザーの好み設定がLLM応答に常に反映されるよう改善
 
 _（開発中に発生した問題・決定事項をここに記録）_

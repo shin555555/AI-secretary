@@ -185,7 +185,16 @@ class Secretary:
         events = await calendar_service.search_events(keyword)
 
         if not events:
-            return f"「{keyword}」に関する予定は見つかりませんでした。"
+            # カレンダーに見つからない場合、保存済み設定も確認
+            prefs = preference_service.get_all_preferences()
+            matching = {k: v for k, v in prefs.items() if keyword in k or keyword in v}
+            if matching:
+                lines = [f"カレンダーに「{keyword}」の予定はありませんが、保存済みの情報がございます：\n"]
+                for k, v in matching.items():
+                    lines.append(f"📝 {k}: {v}")
+                return "\n".join(lines)
+            # 設定にも見つからない場合、汎用会話で回答を試みる
+            return await self._handle_general(user_message, "schedule_search")
 
         formatted = calendar_service.format_events_for_display(events, show_date=True)
         return f"「{keyword}」に関する予定です：\n\n{formatted}"
@@ -914,13 +923,20 @@ JSONのみ返してください。
     # --- 汎用会話 ---
 
     async def _handle_general(self, user_message: str, _intent: str) -> str:
-        """汎用LLM会話で応答を生成（会話履歴付き）"""
+        """汎用LLM会話で応答を生成（会話履歴+保存済み設定付き）"""
         context = memory_service.format_context_for_prompt()
 
+        # 保存済み設定をコンテキストに追加
+        prefs = preference_service.get_all_preferences()
+        pref_context = ""
+        if prefs:
+            pref_lines = [f"- {k}: {v}" for k, v in prefs.items()]
+            pref_context = f"\n\n【ユーザーが覚えてほしいと言った情報】\n" + "\n".join(pref_lines)
+
         if context:
-            prompt = f"{context}\n\nユーザー: {user_message}"
+            prompt = f"{context}{pref_context}\n\nユーザー: {user_message}"
         else:
-            prompt = user_message
+            prompt = f"{pref_context}\n\nユーザー: {user_message}" if pref_context else user_message
 
         if await llm_service._is_ollama_available():
             return await llm_service.generate(
