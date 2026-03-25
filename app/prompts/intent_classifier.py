@@ -27,6 +27,7 @@ INTENT_CLASSIFICATION_PROMPT = """\
 - mail_reply: メールに返信して送信（例: 「メール1に返信して」「メール1に返信して。〇〇と伝えて」）
 - mail_drafts: 下書き一覧を確認（例: 「下書き一覧」「下書き確認」）
 - mail_send: 下書きを送信（例: 「下書き1を送信して」「下書き1送信」）
+- summary_report: 過去の活動を振り返る・集計する（例: 「今週何件の面談があった？」「今月のタスク完了数は？」「先週の振り返り」「週報」「月報」「今月の実績」「先月何件予定があった？」）
 - help: 使い方やできることを確認（例: 「ヘルプ」「使い方」「何ができる？」「できること」）
 - general: 上記に当てはまらない一般的な会話・質問
 
@@ -68,6 +69,7 @@ VALID_INTENTS = [
     "mail_reply",
     "mail_drafts",
     "mail_send",
+    "summary_report",
     "help",
     "general",
 ]

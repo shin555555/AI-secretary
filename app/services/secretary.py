@@ -80,6 +80,7 @@ class Secretary:
             "mail_reply": lambda: self._handle_mail_reply(user_message),
             "mail_drafts": lambda: self._handle_mail_drafts(),
             "mail_send": lambda: self._handle_mail_send(user_message),
+            "summary_report": lambda: self._handle_summary_report(user_message),
             "help": lambda: self._handle_help(),
         }
 
@@ -187,6 +188,12 @@ class Secretary:
             # 「面談を削除して」のように予定名+削除
             if re.search(r".+を(削除|キャンセル)", msg) and not re.search(r"タスク|メール|下書き", msg):
                 return "schedule_delete"
+
+        # 週報・月報パターン
+        if re.search(r"(週報|月報|振り返り|実績|サマリー)", msg):
+            return "summary_report"
+        if re.search(r"(今週|先週|今月|先月).*(何件|まとめ|集計|レポート)", msg):
+            return "summary_report"
 
         return None
 
@@ -1483,6 +1490,86 @@ JSONのみ返してください。
         match = re.search(r"(\d+)", text)
         return int(match.group(1)) if match else None
 
+    async def _handle_summary_report(self, user_message: str) -> str:
+        """週報・月報サマリーを生成"""
+        now = datetime.now()
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # 期間を判定
+        if "先月" in user_message:
+            if now.month == 1:
+                start = datetime(now.year - 1, 12, 1)
+            else:
+                start = datetime(now.year, now.month - 1, 1)
+            end = datetime(now.year, now.month, 1)
+            label = f"先月（{start.month}月）"
+        elif "今月" in user_message or "月報" in user_message:
+            start = datetime(now.year, now.month, 1)
+            end = today + timedelta(days=1)
+            label = f"今月（{now.month}月）"
+        elif "先週" in user_message:
+            start = today - timedelta(days=today.weekday() + 7)
+            end = start + timedelta(days=7)
+            label = "先週"
+        else:
+            # デフォルト: 今週
+            start = today - timedelta(days=today.weekday())
+            end = today + timedelta(days=1)
+            label = "今週"
+
+        # カレンダー予定を取得
+        events = await calendar_service._get_events_between(start, end)
+
+        # 完了タスクを取得
+        completed_tasks = task_service.get_completed_tasks_between(start, end)
+
+        # 予定の集計
+        event_count = len(events) if events else 0
+        event_categories: dict[str, int] = {}
+        for e in (events or []):
+            title = e.get("title", "")
+            # キーワードで簡易分類
+            if any(k in title for k in ["面談", "相談", "面接"]):
+                event_categories["面談・相談"] = event_categories.get("面談・相談", 0) + 1
+            elif any(k in title for k in ["会議", "打ち合わせ", "ミーティング", "MTG"]):
+                event_categories["会議・打ち合わせ"] = event_categories.get("会議・打ち合わせ", 0) + 1
+            elif any(k in title for k in ["研修", "セミナー", "勉強会"]):
+                event_categories["研修・セミナー"] = event_categories.get("研修・セミナー", 0) + 1
+            else:
+                event_categories["その他"] = event_categories.get("その他", 0) + 1
+
+        # レポート構築
+        period_str = f"{start.month}/{start.day}〜{(end - timedelta(days=1)).month}/{(end - timedelta(days=1)).day}"
+        lines = [f"📊 {label}のサマリー（{period_str}）\n"]
+
+        # 予定セクション
+        lines.append(f"📅 予定: {event_count}件")
+        if event_categories:
+            for cat, count in sorted(event_categories.items(), key=lambda x: x[1], reverse=True):
+                lines.append(f"  • {cat}: {count}件")
+        lines.append("")
+
+        # タスクセクション
+        lines.append(f"✅ 完了タスク: {len(completed_tasks)}件")
+        if completed_tasks:
+            for t in completed_tasks[:10]:
+                done_str = t.completed_at.strftime("%m/%d") if t.completed_at else ""
+                lines.append(f"  • {t.title}（{done_str}完了）")
+            if len(completed_tasks) > 10:
+                lines.append(f"  ...他 {len(completed_tasks) - 10}件")
+        lines.append("")
+
+        # 未完了タスク（期間内が期限のもの）
+        pending = task_service.get_pending_tasks()
+        overdue = [t for t in pending if t.due_date and t.due_date < now]
+        if overdue:
+            lines.append(f"⚠️ 期限超過タスク: {len(overdue)}件")
+            for t in overdue[:5]:
+                due_str = t.due_date.strftime("%m/%d") if t.due_date else ""
+                lines.append(f"  • {t.title}（期限: {due_str}）")
+
+        return "\n".join(lines)
+
     async def _handle_help(self) -> str:
         """凛にできることを表示"""
         return """📖 凛にできること
@@ -1508,6 +1595,11 @@ JSONのみ返してください。
 • 「メール1に返信して。〇〇と伝えて」— 返信を送信
 • 「下書き一覧」— 保存した下書きを確認
 • 「下書き1を送信して」— 下書きを送信
+
+📊 振り返り
+• 「週報」「今週の振り返り」— 今週の予定・タスク集計
+• 「月報」「今月の実績」— 今月のサマリー
+• 「先週何件面談があった？」— 過去の活動集計
 
 ⚙️ その他
 • 「ブリーフィング」— 予定+タスク+メールのまとめ

@@ -83,6 +83,20 @@ class TaskService:
             )
             return list(session.execute(stmt).scalars().all())
 
+    def get_completed_tasks_between(self, start: datetime, end: datetime) -> list[Task]:
+        """指定期間内に完了したタスクを取得"""
+        with SessionLocal() as session:
+            stmt = (
+                select(Task)
+                .where(
+                    Task.status == "done",
+                    Task.completed_at >= start,
+                    Task.completed_at < end,
+                )
+                .order_by(Task.completed_at)
+            )
+            return list(session.execute(stmt).scalars().all())
+
     def complete_task(self, task_id: int) -> Task | None:
         """タスクを完了にする"""
         with SessionLocal() as session:

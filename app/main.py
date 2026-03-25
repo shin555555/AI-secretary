@@ -21,6 +21,7 @@ def _setup_scheduler() -> None:
     from scheduler.jobs import (
         deadline_reminder,
         generate_recurring_tasks,
+        mail_notification_check,
         morning_briefing,
         schedule_reminder,
     )
@@ -62,8 +63,17 @@ def _setup_scheduler() -> None:
         id="schedule_reminder",
     )
 
+    # メール着信通知（15分間隔、平日のみ）
+    scheduler.add_job(
+        mail_notification_check,
+        "cron",
+        day_of_week="mon-fri",
+        minute="*/15",
+        id="mail_notification_check",
+    )
+
     scheduler.start()
-    logger.info("スケジューラ起動完了（ブリーフィング/タスク生成/期限リマインド/予定リマインド）")
+    logger.info("スケジューラ起動完了（ブリーフィング/タスク生成/期限リマインド/予定リマインド/メール通知）")
 
 
 @asynccontextmanager

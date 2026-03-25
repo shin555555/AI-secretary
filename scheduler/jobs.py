@@ -300,3 +300,57 @@ def schedule_reminder() -> None:
 
     except Exception as e:
         logger.error(f"予定リマインド送信失敗: {e}")
+
+
+# メール通知済みID（二重通知防止）
+_notified_mail_ids: set[str] = set()
+_notified_mail_date: str = ""
+
+
+def mail_notification_check() -> None:
+    """重要メール着信チェック（15分間隔で実行）"""
+    global _notified_mail_ids, _notified_mail_date
+
+    now_str = date.today().isoformat()
+
+    # 日付が変わったら通知済みリストをクリア
+    if _notified_mail_date != now_str:
+        _notified_mail_ids = set()
+        _notified_mail_date = now_str
+
+    try:
+        loop = asyncio.new_event_loop()
+        messages = loop.run_until_complete(gmail_service.get_important_messages())
+        loop.close()
+
+        if not messages:
+            return
+
+        # 未通知のメールだけ抽出
+        new_messages = [m for m in messages if m["id"] not in _notified_mail_ids]
+        if not new_messages:
+            return
+
+        # 通知済みに追加
+        for m in new_messages:
+            _notified_mail_ids.add(m["id"])
+
+        # 通知メッセージ構築
+        lines = [f"📬 新着メールが{len(new_messages)}件あります。\n"]
+        for m in new_messages[:5]:
+            from_display = m["from_name"] or m["from_email"]
+            lines.append(f"• {from_display}")
+            lines.append(f"  件名: {m['subject']}")
+            lines.append("")
+
+        if len(new_messages) > 5:
+            lines.append(f"他 {len(new_messages) - 5}件")
+            lines.append("")
+
+        lines.append("「メール確認」で詳細を表示できます。")
+
+        _send_line_push("\n".join(lines))
+        logger.info(f"メール着信通知送信: {len(new_messages)}件")
+
+    except Exception as e:
+        logger.error(f"メール着信チェック失敗: {e}")
