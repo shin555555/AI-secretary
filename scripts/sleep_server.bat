@@ -12,5 +12,8 @@ call scripts\stop_server.bat
 REM 3秒待ってからスリープ
 timeout /t 3 /nobreak >NUL
 
-REM PCをスリープ状態にする
+REM 休止状態を無効化（有効だとSetSuspendStateがスリープではなく休止になる）
+powercfg /h off
+
+REM PCをスリープ状態にする（S3スリープ、タスクスケジューラのWakeToRunで復帰可能）
 rundll32.exe powrprof.dll,SetSuspendState 0,1,0

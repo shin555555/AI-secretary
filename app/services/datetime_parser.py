@@ -56,13 +56,19 @@ def _resolve_date(raw: str | None) -> datetime | None:
 
     if "今日" in raw:
         return today
+    if "昨日" in raw:
+        return today - timedelta(days=1)
     if "明後日" in raw:
         return today + timedelta(days=2)
     if "明日" in raw:
         return today + timedelta(days=1)
 
-    # 「来週X曜」
-    next_week_match = re.search(r"来週\s*([月火水木金土日])", raw)
+    # 「来月」「今月」「先月」「毎月」は月の概念であり、曜日の「月」ではない → None を返す
+    if re.search(r"[来今先毎翌当]月", raw):
+        return None
+
+    # 「来週X曜」（「来週の月曜」のように「の」が入るケースにも対応）
+    next_week_match = re.search(r"来週\s*の?\s*([月火水木金土日])", raw)
     if next_week_match:
         target_weekday = WEEKDAY_MAP.get(next_week_match.group(1))
         if target_weekday is not None:

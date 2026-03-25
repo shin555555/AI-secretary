@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from app.prompts.intent_classifier import INTENT_CLASSIFICATION_PROMPT, VALID_INTENTS
 from app.prompts.system_prompt import SYSTEM_PROMPT
 from app.services.calendar_service import calendar_service
-from app.services.datetime_parser import parse_schedule_from_message
+from app.services.datetime_parser import parse_schedule_from_message, _resolve_date
 from app.services.gmail_service import gmail_service
 from app.services.llm_service import llm_service
 from app.services.mail_filter_service import mail_filter_service
@@ -50,7 +50,7 @@ class Secretary:
 
         # インテントに応じたルーティング
         handler_map = {
-            "schedule_today": lambda: self._handle_schedule_today(),
+            "schedule_check": lambda: self._handle_schedule_check(user_message),
             "schedule_week": lambda: self._handle_schedule_week(user_message),
             "schedule_create": lambda: self._handle_schedule_create(user_message),
             "schedule_search": lambda: self._handle_schedule_search(user_message),
@@ -106,17 +106,87 @@ class Secretary:
 
     # --- カレンダー ---
 
-    async def _handle_schedule_today(self) -> str:
-        """今日の予定を取得して返答"""
-        events = await calendar_service.get_today_events()
+    async def _handle_schedule_check(self, user_message: str) -> str:
+        """特定の日または月の予定を取得して返答"""
+        now = datetime.now()
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # 月単位のパターンを先にチェック
+        month_range = self._detect_month_range(user_message, now)
+        if month_range:
+            start, end, label = month_range
+            events = await calendar_service._get_events_between(start, end)
+            if events is None:
+                return "申し訳ございません、カレンダーへの接続に失敗しました。"
+            formatted = calendar_service.format_events_for_display(events, show_date=True)
+            if formatted == "予定はありません。":
+                return f"{label}の予定はございません。"
+            count = len(events)
+            return f"{label}の予定です（{count}件）：\n\n{formatted}"
+
+        # 日単位のパターン
+        target_date = _resolve_date(user_message)
+        if target_date is None:
+            target_date = today
+
+        days_offset = (target_date.date() - today.date()).days
+
+        # 日付ラベルを生成
+        weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
+        if days_offset == 0:
+            label = "本日"
+        elif days_offset == 1:
+            label = "明日"
+        elif days_offset == 2:
+            label = "明後日"
+        elif days_offset == -1:
+            label = "昨日"
+        else:
+            wd = weekday_names[target_date.weekday()]
+            label = f"{target_date.month}/{target_date.day}({wd})"
+
+        events = await calendar_service._get_events_for_range(days=days_offset)
         if events is None:
             return "申し訳ございません、カレンダーへの接続に失敗しました。Google認証が完了しているか確認してください。"
 
         formatted = calendar_service.format_events_for_display(events)
         if formatted == "予定はありません。":
-            return "本日の予定はございません。"
+            return f"{label}の予定はございません。"
 
-        return f"本日の予定です：\n\n{formatted}"
+        return f"{label}の予定です：\n\n{formatted}"
+
+    def _detect_month_range(
+        self, message: str, now: datetime
+    ) -> tuple[datetime, datetime, str] | None:
+        """メッセージから月単位の日付範囲を検出"""
+        year = now.year
+        month = now.month
+
+        if "来月" in message:
+            if month == 12:
+                start = datetime(year + 1, 1, 1)
+            else:
+                start = datetime(year, month + 1, 1)
+            label = f"来月（{start.month}月）"
+        elif "先月" in message:
+            if month == 1:
+                start = datetime(year - 1, 12, 1)
+            else:
+                start = datetime(year, month - 1, 1)
+            label = f"先月（{start.month}月）"
+        elif "今月" in message:
+            start = datetime(year, month, 1)
+            label = f"今月（{month}月）"
+        else:
+            return None
+
+        # 月末日を算出
+        if start.month == 12:
+            end = datetime(start.year + 1, 1, 1)
+        else:
+            end = datetime(start.year, start.month + 1, 1)
+
+        return start, end, label
 
     async def _handle_schedule_week(self, user_message: str) -> str:
         """週間予定を取得して返答（今日から/今週/来週）"""
@@ -381,7 +451,7 @@ JSONのみ返してください。
 
     async def _handle_task_list(self, user_message: str) -> str:
         """タスク一覧を表示"""
-        if any(w in user_message for w in ["ルーティン", "繰り返し", "定期"]):
+        if any(w in user_message for w in ["ルーティン", "繰り返し", "定期", "毎月", "毎週", "毎日"]):
             recurring = task_service.get_active_recurring_tasks()
             return task_service.format_recurring_for_display(recurring)
 
@@ -860,7 +930,7 @@ JSONのみ返してください。
         return """📖 凛にできること
 
 📅 スケジュール
-• 「今日の予定」— 今日の予定を確認
+• 「今日の予定」「明日の予定」— 特定の日の予定を確認
 • 「今週の予定」— 今日から1週間の予定を確認
 • 「予定を追加したい」— カレンダーに予定を登録
 • 「〇〇と打ち合わせしたい」— 空き時間を検索して候補提示
