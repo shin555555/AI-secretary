@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "skills": {
+    "api-contract-testing": {
+      "source": "aj-geddes/useful-ai-prompts",
+      "sourceType": "github",
+      "computedHash": "2b466cec96a71c0bfde22a73a984b89342311fe742d58d0a681b8dd5ae735ec8"
+    },
+    "python-testing-patterns": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "computedHash": "45c36d56b92b0bdb99c86052b45e0c7e5e424c4ec7a4b2f45604e195dc80289c"
+    },
+    "security-review": {
+      "source": "getsentry/skills",
+      "sourceType": "github",
+      "computedHash": "453c810edf070323a8a5ef2b551813d5c9fb98b2f56a54446e184e1fd3f39978"
+    }
+  }
+}
