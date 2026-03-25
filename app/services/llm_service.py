@@ -37,7 +37,7 @@ class LLMService:
             try:
                 return await self._generate_gemini(prompt, system_prompt, temperature)
             except Exception as e:
-                logger.error(f"Gemini生成も失敗: {e}")
+                logger.error(f"Gemini生成も失敗: {self._sanitize_error(e)}")
 
         return "申し訳ございません、現在応答を生成できません。しばらくしてからもう一度お試しください。"
 
@@ -80,6 +80,13 @@ class LLMService:
             logger.info(f"Ollama応答生成完了（{len(content)}文字）")
             return content.strip()
 
+    def _sanitize_error(self, error: Exception) -> str:
+        """エラーメッセージからAPIキーを除去"""
+        msg = str(error)
+        if self._gemini_api_key:
+            msg = msg.replace(self._gemini_api_key, "***")
+        return msg
+
     async def _generate_gemini(
         self,
         prompt: str,
@@ -89,8 +96,9 @@ class LLMService:
         """Google Gemini APIで推論（PIIフィルタ済みデータのみ渡すこと）"""
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self._gemini_model}:generateContent?key={self._gemini_api_key}"
+            f"{self._gemini_model}:generateContent"
         )
+        headers = {"x-goog-api-key": self._gemini_api_key}
 
         contents: list[dict[str, Any]] = []
         if system_prompt:
@@ -116,7 +124,7 @@ class LLMService:
         }
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
             text: str = data["candidates"][0]["content"]["parts"][0]["text"]
