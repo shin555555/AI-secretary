@@ -43,8 +43,14 @@ class Secretary:
             if slot_result:
                 return slot_result
 
-        intent = await self._classify_intent(user_message)
-        logger.info(f"インテント: {intent}")
+        # キーワードベースの事前分類（LLMの誤分類を防止）
+        pre_intent = self._pre_classify_intent(user_message)
+        if pre_intent:
+            intent = pre_intent
+            logger.info(f"インテント（事前分類）: {intent}")
+        else:
+            intent = await self._classify_intent(user_message)
+            logger.info(f"インテント: {intent}")
 
         memory_service.save_message(role="user", content=user_message, intent=intent)
 
@@ -54,6 +60,8 @@ class Secretary:
             "schedule_week": lambda: self._handle_schedule_week(user_message),
             "schedule_create": lambda: self._handle_schedule_create(user_message),
             "schedule_search": lambda: self._handle_schedule_search(user_message),
+            "schedule_update": lambda: self._handle_schedule_update(user_message),
+            "schedule_delete": lambda: self._handle_schedule_delete(user_message),
             "schedule_find_slot": lambda: self._handle_schedule_find_slot(user_message),
             "task_add": lambda: self._handle_task_add(user_message),
             "task_recurring": lambda: self._handle_task_recurring(user_message),
@@ -84,6 +92,33 @@ class Secretary:
         preference_service.log_interaction(intent, {"message_length": len(user_message)})
 
         return response
+
+    def _pre_classify_intent(self, user_message: str) -> str | None:
+        """キーワードベースの事前分類（LLM誤分類を防止）"""
+        msg = user_message.strip()
+
+        # 予定の変更パターン
+        if re.search(r"(予定|スケジュール|会議|面談|打ち合わせ|ミーティング).*(変更|ずらし|移動|リスケ)", msg):
+            return "schedule_update"
+        if re.search(r"(変更|ずらし|移動|リスケ).*(予定|スケジュール|会議|面談|打ち合わせ|ミーティング)", msg):
+            return "schedule_update"
+        # 「〇〇を△時に変更して」パターン（時刻変更）
+        if re.search(r".+を\d{1,2}時.*に?(変更|ずらし|移動)", msg):
+            return "schedule_update"
+        if "予定を変更" in msg or "予定変更" in msg or "スケジュール変更" in msg:
+            return "schedule_update"
+
+        # 予定の削除パターン（「タスク」を含まない場合）
+        if "タスク" not in msg:
+            if re.search(r"(予定|スケジュール|会議|面談|打ち合わせ|ミーティング).*(削除|キャンセル|取り消|消して|なくし)", msg):
+                return "schedule_delete"
+            if re.search(r"(削除|キャンセル|取り消).*(予定|スケジュール|会議|面談|打ち合わせ|ミーティング)", msg):
+                return "schedule_delete"
+            # 「面談を削除して」のように予定名+削除
+            if re.search(r".+を(削除|キャンセル)", msg) and not re.search(r"タスク|メール|下書き", msg):
+                return "schedule_delete"
+
+        return None
 
     async def _classify_intent(self, user_message: str) -> str:
         """LLMでインテント分類"""
@@ -268,6 +303,221 @@ class Secretary:
 
         formatted = calendar_service.format_events_for_display(events, show_date=True)
         return f"「{keyword}」に関する予定です：\n\n{formatted}"
+
+    async def _handle_schedule_update(self, user_message: str) -> str:
+        """予定を変更する（検索→候補表示→確認→更新）"""
+        short_phrases = ["予定を変更", "予定変更", "予定を変更したい", "スケジュール変更"]
+        if user_message.strip() in short_phrases:
+            return "どの予定をどのように変更しますか？\n（例：「明日の会議を15時に変更して」「田中さん面談を来週月曜に変更」）"
+
+        # LLMで変更対象と変更内容を抽出
+        extract_prompt = f"""ユーザーのメッセージから予定の変更情報を抽出してJSON形式で返してください。
+
+- search_keyword: 変更対象の予定キーワード（「会議」「面談」「田中さん」等）
+- new_date_raw: 変更後の日付表現（「明日」「来週月曜」等。変更なしならnull）
+- new_time_raw: 変更後の時刻表現（「15時」「14:00」等。変更なしならnull）
+- new_title: 変更後のタイトル（変更なしならnull）
+
+JSONのみ返してください。
+メッセージ：{user_message}"""
+
+        if await llm_service._is_ollama_available():
+            raw = await llm_service.generate(prompt=extract_prompt, temperature=0.1)
+        else:
+            filtered = pii_filter.redact(extract_prompt)
+            raw = await llm_service.generate(prompt=filtered, temperature=0.1)
+            raw = pii_filter.restore(raw)
+
+        try:
+            clean = raw.strip()
+            if "```" in clean:
+                clean = clean.split("```")[1]
+                if clean.startswith("json"):
+                    clean = clean[4:]
+            parsed = json.loads(clean.strip())
+        except (json.JSONDecodeError, IndexError):
+            return "変更内容を読み取れませんでした。\n例：「会議を15時に変更して」「田中さん面談を明日に変更」"
+
+        keyword = parsed.get("search_keyword", "")
+        if not keyword:
+            return "どの予定を変更するか分かりませんでした。予定のタイトルや相手の名前を含めてください。"
+
+        # カレンダーから検索
+        events = await calendar_service.search_events(keyword)
+        if not events:
+            return f"「{keyword}」に一致する予定が見つかりませんでした。"
+
+        # 未来の予定のみに絞る
+        now = datetime.now()
+        future_events = []
+        for e in events:
+            try:
+                start_str = e["start"]
+                start_dt = datetime.fromisoformat(start_str)
+                if start_dt.tzinfo is not None:
+                    start_dt = start_dt.replace(tzinfo=None)
+                if start_dt >= now:
+                    future_events.append(e)
+            except (ValueError, KeyError):
+                future_events.append(e)
+
+        if not future_events:
+            return f"「{keyword}」に一致する今後の予定が見つかりませんでした。"
+
+        # 候補が1件なら直接変更、複数なら選択を求める
+        if len(future_events) == 1:
+            target = future_events[0]
+        else:
+            # 保留状態に保存して選択を求める
+            self._pending_action = {
+                "type": "schedule_update",
+                "events": future_events,
+                "parsed": parsed,
+            }
+            lines = [f"「{keyword}」に一致する予定が{len(future_events)}件あります。どれを変更しますか？\n"]
+            weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
+            for i, e in enumerate(future_events[:5], 1):
+                try:
+                    dt = datetime.fromisoformat(e["start"])
+                    if dt.tzinfo is not None:
+                        dt = dt.replace(tzinfo=None)
+                    wd = weekday_names[dt.weekday()]
+                    lines.append(f"  {i}. {dt.month}/{dt.day}({wd}) {dt.strftime('%H:%M')} {e['title']}")
+                except (ValueError, KeyError):
+                    lines.append(f"  {i}. {e['title']}")
+            lines.append("\n番号で選んでください。（例：「1」）")
+            return "\n".join(lines)
+
+        # 変更を実行
+        return await self._execute_schedule_update(target, parsed)
+
+    async def _execute_schedule_update(self, target: dict, parsed: dict) -> str:
+        """予定の変更を実行"""
+        from app.services.datetime_parser import _resolve_date, _resolve_time
+
+        new_start = None
+        new_end = None
+
+        new_date = _resolve_date(parsed.get("new_date_raw"))
+        new_time = _resolve_time(parsed.get("new_time_raw"))
+
+        # 元の開始時刻を取得
+        try:
+            orig_start = datetime.fromisoformat(target["start"])
+            if orig_start.tzinfo is not None:
+                orig_start = orig_start.replace(tzinfo=None)
+            orig_end = datetime.fromisoformat(target["end"])
+            if orig_end.tzinfo is not None:
+                orig_end = orig_end.replace(tzinfo=None)
+            duration = orig_end - orig_start
+        except (ValueError, KeyError):
+            duration = timedelta(hours=1)
+            orig_start = datetime.now()
+
+        if new_date and new_time:
+            new_start = new_date.replace(hour=new_time[0], minute=new_time[1])
+        elif new_date:
+            new_start = new_date.replace(hour=orig_start.hour, minute=orig_start.minute)
+        elif new_time:
+            new_start = orig_start.replace(hour=new_time[0], minute=new_time[1])
+
+        if new_start:
+            new_end = new_start + duration
+
+        new_title = parsed.get("new_title")
+
+        if not new_start and not new_title:
+            return "変更内容が指定されていません。日時やタイトルの変更内容を教えてください。"
+
+        result = await calendar_service.update_event(
+            event_id=target["id"],
+            title=new_title,
+            start_datetime=new_start,
+            end_datetime=new_end,
+        )
+
+        if result is None:
+            return "申し訳ございません、予定の変更に失敗しました。"
+
+        weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
+        changes = []
+        if new_title:
+            changes.append(f"📝 タイトル: {new_title}")
+        if new_start:
+            wd = weekday_names[new_start.weekday()]
+            changes.append(f"⏰ 日時: {new_start.month}/{new_start.day}({wd}) {new_start.strftime('%H:%M')}〜{new_end.strftime('%H:%M')}")
+
+        return f"✅ 予定を変更しました。\n\n📅 {result.get('title', target['title'])}\n" + "\n".join(changes)
+
+    async def _handle_schedule_delete(self, user_message: str) -> str:
+        """予定を削除する（検索→候補表示→確認→削除）"""
+        short_phrases = ["予定を削除", "予定削除", "予定をキャンセル", "予定を消して"]
+        if user_message.strip() in short_phrases:
+            return "どの予定を削除しますか？\n（例：「明日の会議を削除して」「田中さん面談をキャンセル」）"
+
+        # LLMでキーワード抽出
+        extract_prompt = f"ユーザーのメッセージから、削除したい予定のキーワード（人名や会議名など）だけを抽出して単語で返してください。説明不要、キーワードのみ。\nメッセージ：{user_message}"
+        keyword = await llm_service.generate(prompt=extract_prompt, temperature=0.1)
+        keyword = keyword.strip().strip("「」『』\"'")
+
+        if not keyword:
+            return "どの予定を削除するか分かりませんでした。予定のタイトルや相手の名前を含めてください。"
+
+        events = await calendar_service.search_events(keyword)
+        if not events:
+            return f"「{keyword}」に一致する予定が見つかりませんでした。"
+
+        # 未来の予定のみ
+        now = datetime.now()
+        future_events = []
+        for e in events:
+            try:
+                start_dt = datetime.fromisoformat(e["start"])
+                if start_dt.tzinfo is not None:
+                    start_dt = start_dt.replace(tzinfo=None)
+                if start_dt >= now:
+                    future_events.append(e)
+            except (ValueError, KeyError):
+                future_events.append(e)
+
+        if not future_events:
+            return f"「{keyword}」に一致する今後の予定が見つかりませんでした。"
+
+        # 候補が1件なら確認、複数なら選択
+        if len(future_events) == 1:
+            target = future_events[0]
+            self._pending_action = {
+                "type": "schedule_delete_confirm",
+                "event": target,
+            }
+            weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
+            try:
+                dt = datetime.fromisoformat(target["start"])
+                if dt.tzinfo is not None:
+                    dt = dt.replace(tzinfo=None)
+                wd = weekday_names[dt.weekday()]
+                time_str = f"{dt.month}/{dt.day}({wd}) {dt.strftime('%H:%M')}"
+            except (ValueError, KeyError):
+                time_str = ""
+            return f"以下の予定を削除してよろしいですか？\n\n📅 {target['title']}\n⏰ {time_str}\n\n「はい」で削除します。"
+        else:
+            self._pending_action = {
+                "type": "schedule_delete_select",
+                "events": future_events,
+            }
+            lines = [f"「{keyword}」に一致する予定が{len(future_events)}件あります。どれを削除しますか？\n"]
+            weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
+            for i, e in enumerate(future_events[:5], 1):
+                try:
+                    dt = datetime.fromisoformat(e["start"])
+                    if dt.tzinfo is not None:
+                        dt = dt.replace(tzinfo=None)
+                    wd = weekday_names[dt.weekday()]
+                    lines.append(f"  {i}. {dt.month}/{dt.day}({wd}) {dt.strftime('%H:%M')} {e['title']}")
+                except (ValueError, KeyError):
+                    lines.append(f"  {i}. {e['title']}")
+            lines.append("\n番号で選んでください。（例：「1」）")
+            return "\n".join(lines)
 
     async def _handle_schedule_find_slot(self, user_message: str) -> str:
         """空き時間を検索して提案"""
@@ -861,13 +1111,72 @@ JSONのみ返してください。
             return pii_filter.restore(result)
 
     async def _handle_confirmation(self, user_message: str) -> str | None:
-        """メール下書き/送信の確認応答を処理"""
+        """メール下書き/送信/予定変更・削除の確認応答を処理"""
         action = self._pending_action
         if not action:
             return None
 
         msg_lower = user_message.strip().lower()
         msg_text = user_message.strip()
+
+        # 予定変更: 候補選択
+        if action["type"] == "schedule_update":
+            num_match = re.search(r"(\d+)", msg_text)
+            if num_match:
+                idx = int(num_match.group(1)) - 1
+                events = action["events"]
+                if 0 <= idx < len(events):
+                    self._pending_action = None
+                    return await self._execute_schedule_update(events[idx], action["parsed"])
+                return f"1〜{len(events)}の番号で選んでください。"
+            if msg_lower in ("キャンセル", "やめる", "やめて", "cancel"):
+                self._pending_action = None
+                return "操作をキャンセルしました。"
+            return None
+
+        # 予定削除: 確認
+        if action["type"] == "schedule_delete_confirm":
+            if msg_lower in ("はい", "ok", "yes", "削除", "消して"):
+                self._pending_action = None
+                event = action["event"]
+                success = await calendar_service.delete_event(event["id"])
+                if success:
+                    return f"🗑️ 「{event['title']}」を削除しました。"
+                return "申し訳ございません、予定の削除に失敗しました。"
+            if msg_lower in ("キャンセル", "やめる", "やめて", "いいえ", "cancel"):
+                self._pending_action = None
+                return "削除をキャンセルしました。"
+            self._pending_action = None
+            return None
+
+        # 予定削除: 候補選択
+        if action["type"] == "schedule_delete_select":
+            num_match = re.search(r"(\d+)", msg_text)
+            if num_match:
+                idx = int(num_match.group(1)) - 1
+                events = action["events"]
+                if 0 <= idx < len(events):
+                    target = events[idx]
+                    self._pending_action = {
+                        "type": "schedule_delete_confirm",
+                        "event": target,
+                    }
+                    weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
+                    try:
+                        dt = datetime.fromisoformat(target["start"])
+                        if dt.tzinfo is not None:
+                            dt = dt.replace(tzinfo=None)
+                        wd = weekday_names[dt.weekday()]
+                        time_str = f"{dt.month}/{dt.day}({wd}) {dt.strftime('%H:%M')}"
+                    except (ValueError, KeyError):
+                        time_str = ""
+                    return f"以下の予定を削除してよろしいですか？\n\n📅 {target['title']}\n⏰ {time_str}\n\n「はい」で削除します。"
+                return f"1〜{len(events)}の番号で選んでください。"
+            if msg_lower in ("キャンセル", "やめる", "やめて", "cancel"):
+                self._pending_action = None
+                return "操作をキャンセルしました。"
+            self._pending_action = None
+            return None
 
         # 「OK」→ 下書き保存
         if action["type"] == "draft" and msg_lower in ("ok", "ＯＫ", "はい", "おk", "オッケー", "おけ"):
@@ -933,6 +1242,8 @@ JSONのみ返してください。
 • 「今日の予定」「明日の予定」— 特定の日の予定を確認
 • 「今週の予定」— 今日から1週間の予定を確認
 • 「予定を追加したい」— カレンダーに予定を登録
+• 「会議を15時に変更して」— 予定を変更
+• 「明日の面談を削除して」— 予定を削除
 • 「〇〇と打ち合わせしたい」— 空き時間を検索して候補提示
 
 📋 タスク管理

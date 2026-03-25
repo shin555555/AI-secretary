@@ -304,6 +304,62 @@ class CalendarService:
         return "\n".join(lines).strip()
 
 
+    async def update_event(
+        self,
+        event_id: str,
+        title: str | None = None,
+        start_datetime: str | datetime | None = None,
+        end_datetime: str | datetime | None = None,
+    ) -> dict | None:
+        """既存イベントを更新"""
+        service = self._build_service()
+        if not service:
+            return None
+
+        try:
+            # 既存イベントを取得
+            event = service.events().get(calendarId="primary", eventId=event_id).execute()
+
+            if title:
+                event["summary"] = title
+            if start_datetime:
+                if isinstance(start_datetime, str):
+                    start_datetime = datetime.fromisoformat(start_datetime)
+                event["start"] = {"dateTime": start_datetime.isoformat(), "timeZone": "Asia/Tokyo"}
+            if end_datetime:
+                if isinstance(end_datetime, str):
+                    end_datetime = datetime.fromisoformat(end_datetime)
+                event["end"] = {"dateTime": end_datetime.isoformat(), "timeZone": "Asia/Tokyo"}
+
+            updated = (
+                service.events()
+                .update(calendarId="primary", eventId=event_id, body=event)
+                .execute()
+            )
+            logger.info(f"予定を更新: {updated.get('summary', '')} (id={event_id})")
+            return {
+                "event_id": updated["id"],
+                "title": updated.get("summary", ""),
+                "start": updated.get("start", {}).get("dateTime", ""),
+            }
+        except HttpError as e:
+            logger.error(f"予定更新エラー: {e}")
+            return None
+
+    async def delete_event(self, event_id: str) -> bool:
+        """イベントを削除"""
+        service = self._build_service()
+        if not service:
+            return False
+
+        try:
+            service.events().delete(calendarId="primary", eventId=event_id).execute()
+            logger.info(f"予定を削除: id={event_id}")
+            return True
+        except HttpError as e:
+            logger.error(f"予定削除エラー: {e}")
+            return False
+
     async def find_available_slots(
         self,
         days: int = 5,
