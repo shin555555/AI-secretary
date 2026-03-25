@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Any
 
@@ -123,13 +124,38 @@ class LLMService:
             },
         }
 
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-            text: str = data["candidates"][0]["content"]["parts"][0]["text"]
-            logger.info(f"Gemini応答生成完了（{len(text)}文字）")
-            return text.strip()
+        max_retries = 3
+        last_error: Exception | None = None
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                async with httpx.AsyncClient(timeout=self._timeout) as client:
+                    resp = await client.post(url, json=payload, headers=headers)
+                    if resp.status_code == 429:
+                        wait = 2 ** attempt  # 2, 4, 8秒
+                        logger.warning(f"Geminiレート制限（429）、{wait}秒後にリトライ（{attempt}/{max_retries}）")
+                        await asyncio.sleep(wait)
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    text: str = data["candidates"][0]["content"]["parts"][0]["text"]
+                    logger.info(f"Gemini応答生成完了（{len(text)}文字）")
+                    return text.strip()
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and attempt < max_retries:
+                    wait = 2 ** attempt
+                    logger.warning(f"Geminiレート制限、{wait}秒後にリトライ（{attempt}/{max_retries}）")
+                    await asyncio.sleep(wait)
+                    last_error = e
+                    continue
+                raise
+            except Exception as e:
+                last_error = e
+                raise
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("Gemini APIリトライ上限超過")
 
 
 # シングルトンインスタンス

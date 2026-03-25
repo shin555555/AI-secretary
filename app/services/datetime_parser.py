@@ -11,7 +11,7 @@ DATETIME_PARSE_PROMPT = """\
 以下のユーザーメッセージから予定情報を抽出してJSON形式で返してください。
 
 【重要】日付・時刻の計算は不要です。ユーザーが言った表現をそのまま返してください。
-- date_raw: 日付表現をそのまま（「明日」「金曜」「3/20」「23日」等）
+- date_raw: 日付表現をそのまま（「明日」「金曜」「3/20」「23日」「3日後」「再来週の水曜」「今週末」「1週間後」等）
 - time_raw: 時刻表現をそのまま（「14時」「16:00」「午後3時」等。不明ならnull）
 - duration_minutes: 所要時間（分）。不明なら60
 
@@ -56,16 +56,69 @@ def _resolve_date(raw: str | None) -> datetime | None:
 
     if "今日" in raw:
         return today
+    if "一昨日" in raw or "おととい" in raw:
+        return today - timedelta(days=2)
     if "昨日" in raw:
         return today - timedelta(days=1)
-    if "明後日" in raw:
+    if "明後日" in raw or "あさって" in raw:
         return today + timedelta(days=2)
     if "明日" in raw:
         return today + timedelta(days=1)
 
+    # 「X日後」「X日前」
+    days_offset_match = re.search(r"(\d+)\s*日\s*(後|前|先)", raw)
+    if days_offset_match:
+        n = int(days_offset_match.group(1))
+        direction = days_offset_match.group(2)
+        if direction == "後":
+            return today + timedelta(days=n)
+        else:
+            return today - timedelta(days=n)
+
+    # 「X週間後」「X週間前」
+    weeks_offset_match = re.search(r"(\d+)\s*週間?\s*(後|前|先)", raw)
+    if weeks_offset_match:
+        n = int(weeks_offset_match.group(1))
+        direction = weeks_offset_match.group(2)
+        if direction == "後":
+            return today + timedelta(weeks=n)
+        else:
+            return today - timedelta(weeks=n)
+
+    # 「Xヶ月後」「Xか月後」
+    months_offset_match = re.search(r"(\d+)\s*[ヶかケ]?月\s*(後|前|先)", raw)
+    if months_offset_match:
+        n = int(months_offset_match.group(1))
+        direction = months_offset_match.group(2)
+        month = now.month + (n if direction == "後" else -n)
+        year = now.year
+        while month > 12:
+            month -= 12
+            year += 1
+        while month < 1:
+            month += 12
+            year -= 1
+        day = min(now.day, 28)  # 月末越え防止
+        return datetime(year, month, day)
+
     # 「来月」「今月」「先月」「毎月」は月の概念であり、曜日の「月」ではない → None を返す
     if re.search(r"[来今先毎翌当]月", raw):
         return None
+
+    # 「今週末」
+    if "今週末" in raw or "週末" in raw:
+        days_to_saturday = (5 - now.weekday()) % 7
+        if days_to_saturday == 0 and now.weekday() == 6:
+            days_to_saturday = 6  # 日曜なら次の土曜
+        return today + timedelta(days=days_to_saturday)
+
+    # 「再来週X曜」
+    week_after_next_match = re.search(r"再来週\s*の?\s*([月火水木金土日])", raw)
+    if week_after_next_match:
+        target_weekday = WEEKDAY_MAP.get(week_after_next_match.group(1))
+        if target_weekday is not None:
+            days_ahead = (target_weekday - now.weekday()) % 7 + 14
+            return today + timedelta(days=days_ahead)
 
     # 「来週X曜」（「来週の月曜」のように「の」が入るケースにも対応）
     next_week_match = re.search(r"来週\s*の?\s*([月火水木金土日])", raw)
@@ -73,6 +126,14 @@ def _resolve_date(raw: str | None) -> datetime | None:
         target_weekday = WEEKDAY_MAP.get(next_week_match.group(1))
         if target_weekday is not None:
             days_ahead = (target_weekday - now.weekday()) % 7 + 7
+            return today + timedelta(days=days_ahead)
+
+    # 「今週X曜」
+    this_week_match = re.search(r"今週\s*の?\s*([月火水木金土日])", raw)
+    if this_week_match:
+        target_weekday = WEEKDAY_MAP.get(this_week_match.group(1))
+        if target_weekday is not None:
+            days_ahead = (target_weekday - now.weekday()) % 7
             return today + timedelta(days=days_ahead)
 
     # 「X曜」「X曜日」（「X日」との誤マッチを防ぐため、数字直後の「日」は除外）
@@ -139,6 +200,9 @@ def _resolve_time(raw: str | None) -> tuple[int, int] | None:
     if time_match:
         hour = int(time_match.group(1))
         minute = int(time_match.group(2)) if time_match.group(2) else 0
+        # 業務時間推定: 1〜6時は午後（13〜18時）と解釈
+        if 1 <= hour <= 6:
+            hour += 12
         return (hour, minute)
 
     return None

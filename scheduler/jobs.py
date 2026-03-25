@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import date, timedelta
 
 import httpx
 from linebot.v3.messaging import (
@@ -40,74 +41,158 @@ def _send_line_push(message: str) -> None:
         logger.error(f"LINE Push通知送信失敗: {e}")
 
 
+def _is_japanese_holiday(target: date | None = None) -> bool:
+    """日本の祝日かどうか判定（振替休日対応）"""
+    if target is None:
+        target = date.today()
+
+    year = target.year
+    holidays: list[date] = []
+
+    # 固定祝日
+    fixed = [
+        (1, 1, "元日"), (2, 11, "建国記念の日"), (2, 23, "天皇誕生日"),
+        (4, 29, "昭和の日"), (5, 3, "憲法記念日"), (5, 4, "みどりの日"),
+        (5, 5, "こどもの日"), (8, 11, "山の日"), (11, 3, "文化の日"),
+        (11, 23, "勤労感謝の日"),
+    ]
+    for m, d, _ in fixed:
+        holidays.append(date(year, m, d))
+
+    # ハッピーマンデー
+    def nth_monday(y: int, m: int, n: int) -> date:
+        first = date(y, m, 1)
+        first_monday = first + timedelta(days=(7 - first.weekday()) % 7)
+        return first_monday + timedelta(weeks=n - 1)
+
+    holidays.append(nth_monday(year, 1, 2))   # 成人の日
+    holidays.append(nth_monday(year, 7, 3))   # 海の日
+    holidays.append(nth_monday(year, 9, 3))   # 敬老の日
+    holidays.append(nth_monday(year, 10, 2))  # スポーツの日
+
+    # 春分・秋分（近似計算）
+    spring = int(20.8431 + 0.242194 * (year - 1980) - int((year - 1980) / 4))
+    autumn = int(23.2488 + 0.242194 * (year - 1980) - int((year - 1980) / 4))
+    holidays.append(date(year, 3, spring))
+    holidays.append(date(year, 9, autumn))
+
+    # 振替休日（祝日が日曜なら翌月曜）
+    substitute = []
+    for h in holidays:
+        if h.weekday() == 6:  # 日曜
+            sub = h + timedelta(days=1)
+            while sub in holidays or sub in substitute:
+                sub += timedelta(days=1)
+            substitute.append(sub)
+    holidays.extend(substitute)
+
+    # 国民の休日（祝日に挟まれた平日）
+    holiday_set = set(holidays)
+    for h in list(holidays):
+        next_day = h + timedelta(days=2)
+        between = h + timedelta(days=1)
+        if next_day in holiday_set and between not in holiday_set and between.weekday() < 5:
+            holidays.append(between)
+
+    return target in set(holidays)
+
+
+def _generate_briefing_message() -> str:
+    """ブリーフィングメッセージを生成"""
+    # カレンダー予定を取得（非同期→同期ブリッジ）
+    loop = asyncio.new_event_loop()
+    today_events = loop.run_until_complete(calendar_service.get_today_events())
+    loop.close()
+
+    # タスクを取得
+    today_tasks = task_service.get_today_due_tasks()
+    upcoming_tasks = task_service.get_upcoming_due_tasks(days=2)
+    # 今日期限を除外して明日期限のみ
+    tomorrow_tasks = [t for t in upcoming_tasks if t not in today_tasks]
+
+    # ブリーフィングメッセージ構築
+    lines = ["おはようございます。本日のブリーフィングです。\n"]
+
+    # 予定
+    if today_events:
+        formatted = calendar_service.format_events_for_display(today_events)
+        lines.append(f"📅 今日の予定（{len(today_events)}件）")
+        lines.append(formatted)
+    else:
+        lines.append("📅 今日の予定はありません。")
+
+    lines.append("")
+
+    # 今日期限のタスク
+    if today_tasks:
+        lines.append(f"✅ 今日期限のタスク（{len(today_tasks)}件）")
+        for task in today_tasks:
+            priority_mark = "【緊急】" if task.priority <= 2 else ""
+            lines.append(f"• {task.title}{priority_mark}")
+    else:
+        lines.append("✅ 今日期限のタスクはありません。")
+
+    lines.append("")
+
+    # 明日期限のタスク
+    if tomorrow_tasks:
+        lines.append(f"⚠️ 明日期限のタスク（{len(tomorrow_tasks)}件）")
+        for task in tomorrow_tasks:
+            lines.append(f"• {task.title}")
+
+    lines.append("")
+
+    # 未読メール
+    try:
+        mail_loop = asyncio.new_event_loop()
+        messages = mail_loop.run_until_complete(gmail_service.get_important_messages())
+        mail_loop.close()
+        if messages:
+            lines.append(gmail_service.format_for_briefing(messages))
+        else:
+            lines.append("📧 未読の重要メールはありません。")
+    except Exception as e:
+        logger.warning(f"ブリーフィングのメール取得失敗: {e}")
+
+    lines.append("\n本日もよろしくお願いいたします。")
+    return "\n".join(lines)
+
+
 def morning_briefing() -> None:
     """毎朝のブリーフィング（APSchedulerから呼ばれる）"""
+    import time
+
+    # 祝日はスキップ
+    if _is_japanese_holiday():
+        logger.info("祝日のため朝ブリーフィングをスキップ")
+        return
+
     logger.info("朝ブリーフィング生成開始")
 
-    try:
-        # カレンダー予定を取得（非同期→同期ブリッジ）
-        loop = asyncio.new_event_loop()
-        today_events = loop.run_until_complete(calendar_service.get_today_events())
-        loop.close()
+    max_retries = 3
+    last_error = None
 
-        # タスクを取得
-        today_tasks = task_service.get_today_due_tasks()
-        upcoming_tasks = task_service.get_upcoming_due_tasks(days=2)
-        # 今日期限を除外して明日期限のみ
-        tomorrow_tasks = [t for t in upcoming_tasks if t not in today_tasks]
-
-        # ブリーフィングメッセージ構築
-        lines = ["おはようございます。本日のブリーフィングです。\n"]
-
-        # 予定
-        if today_events:
-            formatted = calendar_service.format_events_for_display(today_events)
-            lines.append(f"📅 今日の予定（{len(today_events)}件）")
-            lines.append(formatted)
-        else:
-            lines.append("📅 今日の予定はありません。")
-
-        lines.append("")
-
-        # 今日期限のタスク
-        if today_tasks:
-            lines.append(f"✅ 今日期限のタスク（{len(today_tasks)}件）")
-            for task in today_tasks:
-                priority_mark = "【緊急】" if task.priority <= 2 else ""
-                lines.append(f"• {task.title}{priority_mark}")
-        else:
-            lines.append("✅ 今日期限のタスクはありません。")
-
-        lines.append("")
-
-        # 明日期限のタスク
-        if tomorrow_tasks:
-            lines.append(f"⚠️ 明日期限のタスク（{len(tomorrow_tasks)}件）")
-            for task in tomorrow_tasks:
-                lines.append(f"• {task.title}")
-
-        lines.append("")
-
-        # 未読メール
+    for attempt in range(1, max_retries + 1):
         try:
-            mail_loop = asyncio.new_event_loop()
-            messages = mail_loop.run_until_complete(gmail_service.get_important_messages())
-            mail_loop.close()
-            if messages:
-                lines.append(gmail_service.format_for_briefing(messages))
-            else:
-                lines.append("📧 未読の重要メールはありません。")
+            message = _generate_briefing_message()
+            _send_line_push(message)
+            logger.info("朝ブリーフィング送信完了")
+            return
         except Exception as e:
-            logger.warning(f"ブリーフィングのメール取得失敗: {e}")
+            last_error = e
+            logger.warning(f"朝ブリーフィング試行{attempt}/{max_retries}失敗: {e}")
+            if attempt < max_retries:
+                time.sleep(30 * attempt)  # 30秒、60秒と待機
 
-        lines.append("\n本日もよろしくお願いいたします。")
-
-        message = "\n".join(lines)
-        _send_line_push(message)
-        logger.info("朝ブリーフィング送信完了")
-
-    except Exception as e:
-        logger.error(f"朝ブリーフィング生成失敗: {e}")
+    # 全リトライ失敗 → ユーザーに通知
+    logger.error(f"朝ブリーフィング全{max_retries}回失敗: {last_error}")
+    try:
+        _send_line_push(
+            "⚠️ 本日の朝ブリーフィングの生成に失敗しました。\n"
+            "カレンダーやタスクの確認は手動でお願いします。"
+        )
+    except Exception:
+        logger.error("ブリーフィング失敗通知の送信にも失敗しました")
 
 
 def generate_recurring_tasks() -> None:

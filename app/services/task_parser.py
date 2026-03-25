@@ -62,28 +62,94 @@ def resolve_date(raw: str | None) -> datetime | None:
     if "今日" in raw:
         return today
 
+    # 「一昨日」「おととい」
+    if "一昨日" in raw or "おととい" in raw:
+        return today - timedelta(days=2)
+
+    # 「昨日」
+    if "昨日" in raw:
+        return today - timedelta(days=1)
+
+    # 「明後日」「あさって」
+    if "明後日" in raw or "あさって" in raw:
+        return today + timedelta(days=2)
+
     # 「明日」
     if "明日" in raw:
         return today + timedelta(days=1)
 
-    # 「明後日」
-    if "明後日" in raw:
-        return today + timedelta(days=2)
+    # 「X日後」「X日前」
+    days_offset_match = re.search(r"(\d+)\s*日\s*(後|前|先)", raw)
+    if days_offset_match:
+        n = int(days_offset_match.group(1))
+        direction = days_offset_match.group(2)
+        if direction == "後":
+            return today + timedelta(days=n)
+        else:
+            return today - timedelta(days=n)
+
+    # 「X週間後」「X週間前」
+    weeks_offset_match = re.search(r"(\d+)\s*週間?\s*(後|前|先)", raw)
+    if weeks_offset_match:
+        n = int(weeks_offset_match.group(1))
+        direction = weeks_offset_match.group(2)
+        if direction == "後":
+            return today + timedelta(weeks=n)
+        else:
+            return today - timedelta(weeks=n)
+
+    # 「Xヶ月後」「Xか月後」
+    months_offset_match = re.search(r"(\d+)\s*[ヶかケ]?月\s*(後|前|先)", raw)
+    if months_offset_match:
+        n = int(months_offset_match.group(1))
+        direction = months_offset_match.group(2)
+        month = now.month + (n if direction == "後" else -n)
+        year = now.year
+        while month > 12:
+            month -= 12
+            year += 1
+        while month < 1:
+            month += 12
+            year -= 1
+        day = min(now.day, 28)
+        return datetime(year, month, day, 23, 59)
+
+    # 「今週末」「週末」
+    if "今週末" in raw or "週末" in raw:
+        days_to_saturday = (5 - now.weekday()) % 7
+        if days_to_saturday == 0 and now.weekday() == 6:
+            days_to_saturday = 6
+        return today + timedelta(days=days_to_saturday)
+
+    # 「再来週X曜」
+    week_after_next_match = re.search(r"再来週\s*の?\s*([月火水木金土日])", raw)
+    if week_after_next_match:
+        target_weekday = WEEKDAY_MAP.get(week_after_next_match.group(1))
+        if target_weekday is not None:
+            days_ahead = (target_weekday - now.weekday()) % 7 + 14
+            return today + timedelta(days=days_ahead)
 
     # 「来週X曜」
-    next_week_match = re.search(r"来週\s*([月火水木金土日])", raw)
+    next_week_match = re.search(r"来週\s*の?\s*([月火水木金土日])", raw)
     if next_week_match:
         target_weekday = WEEKDAY_MAP.get(next_week_match.group(1))
         if target_weekday is not None:
             days_ahead = (target_weekday - now.weekday()) % 7 + 7
             return today + timedelta(days=days_ahead)
 
+    # 「今週X曜」
+    this_week_match = re.search(r"今週\s*の?\s*([月火水木金土日])", raw)
+    if this_week_match:
+        target_weekday = WEEKDAY_MAP.get(this_week_match.group(1))
+        if target_weekday is not None:
+            days_ahead = (target_weekday - now.weekday()) % 7
+            return today + timedelta(days=days_ahead)
+
     # 「X曜」「X曜日」（今週の、過ぎていたら来週）
-    for label, weekday_num in WEEKDAY_MAP.items():
-        if label in raw:
+    for label, weekday_num in sorted(WEEKDAY_MAP.items(), key=lambda x: len(x[0]), reverse=True):
+        if label in raw and not re.search(r"\d" + re.escape(label), raw):
             days_ahead = (weekday_num - now.weekday()) % 7
             if days_ahead == 0:
-                # 当日の場合はそのまま今日
                 return today
             return today + timedelta(days=days_ahead)
 
