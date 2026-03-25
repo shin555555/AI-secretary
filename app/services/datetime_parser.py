@@ -169,10 +169,22 @@ async def parse_schedule_from_message(user_message: str) -> dict | None:
     if date is None:
         return parsed  # 日付不明でもtitleは返す
 
+    rrule = parsed.get("rrule")
+
     if time:
         start_dt = date.replace(hour=time[0], minute=time[1])
+    elif rrule:
+        # 繰り返し予定は時刻不明でもデフォルト9:00（都度聞き返すのは不自然）
+        start_dt = date.replace(hour=9, minute=0)
     else:
-        start_dt = date.replace(hour=9, minute=0)  # 時刻不明なら9:00
+        # 単発予定で時刻不明 → 聞き返し用のフラグを返す
+        return {
+            "title": parsed.get("title", "無題"),
+            "date": date.isoformat(),
+            "duration_minutes": duration,
+            "rrule": rrule,
+            "time_missing": True,
+        }
 
     end_dt = start_dt + timedelta(minutes=duration)
 
@@ -180,5 +192,5 @@ async def parse_schedule_from_message(user_message: str) -> dict | None:
         "title": parsed.get("title", "無題"),
         "start_datetime": start_dt.isoformat(),
         "end_datetime": end_dt.isoformat(),
-        "rrule": parsed.get("rrule"),
+        "rrule": rrule,
     }

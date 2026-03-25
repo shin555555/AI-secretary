@@ -185,6 +185,29 @@ class CalendarService:
             logger.error(f"予定作成エラー: {e}")
             return None
 
+    async def force_create_event(self, event_body: dict) -> dict | None:
+        """重複チェックをスキップして強制的にイベントを作成"""
+        service = self._build_service()
+        if not service:
+            return None
+
+        try:
+            created = (
+                service.events().insert(calendarId="primary", body=event_body).execute()
+            )
+            title = event_body.get("summary", "無題")
+            start_str = event_body.get("start", {}).get("dateTime", "")
+            logger.info(f"予定を強制作成: {title}")
+            return {
+                "conflict": False,
+                "event_id": created["id"],
+                "title": title,
+                "start": start_str,
+            }
+        except HttpError as e:
+            logger.error(f"予定強制作成エラー: {e}")
+            return None
+
     async def search_events(self, query: str) -> list[dict]:
         """キーワードで予定を検索（過去半年〜未来半年）"""
         service = self._build_service()

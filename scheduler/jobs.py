@@ -139,3 +139,79 @@ def deadline_reminder() -> None:
 
     except Exception as e:
         logger.error(f"期限リマインド送信失敗: {e}")
+
+
+# 通知済みイベントIDを記憶（二重通知防止）
+_notified_event_ids: set[str] = set()
+_notified_date: str = ""
+
+
+def schedule_reminder() -> None:
+    """カレンダー予定の30分前リマインド（10分間隔で実行）"""
+    global _notified_event_ids, _notified_date
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+
+    # 日付が変わったら通知済みリストをクリア
+    if _notified_date != today_str:
+        _notified_event_ids = set()
+        _notified_date = today_str
+
+    # 土日はスキップ
+    if now.weekday() >= 5:
+        return
+
+    try:
+        loop = asyncio.new_event_loop()
+        events = loop.run_until_complete(calendar_service.get_today_events())
+        loop.close()
+
+        if not events:
+            return
+
+        weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
+        reminders = []
+
+        for event in events:
+            if event.get("all_day"):
+                continue
+
+            event_id = event.get("id", "")
+            if event_id in _notified_event_ids:
+                continue
+
+            try:
+                start_dt = datetime.fromisoformat(event["start"])
+                if start_dt.tzinfo is not None:
+                    start_dt = start_dt.replace(tzinfo=None)
+
+                minutes_until = (start_dt - now).total_seconds() / 60
+
+                # 10分〜30分以内に始まる予定を通知
+                if 10 <= minutes_until <= 30:
+                    reminders.append({
+                        "title": event["title"],
+                        "start_dt": start_dt,
+                        "minutes": int(minutes_until),
+                    })
+                    _notified_event_ids.add(event_id)
+            except (ValueError, KeyError):
+                continue
+
+        if not reminders:
+            return
+
+        lines = ["⏰ まもなく予定があります。\n"]
+        for r in reminders:
+            lines.append(
+                f"• {r['start_dt'].strftime('%H:%M')}〜 {r['title']}"
+                f"（あと約{r['minutes']}分）"
+            )
+
+        _send_line_push("\n".join(lines))
+        logger.info(f"予定リマインド送信: {len(reminders)}件")
+
+    except Exception as e:
+        logger.error(f"予定リマインド送信失敗: {e}")

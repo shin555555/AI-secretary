@@ -42,17 +42,19 @@ class Secretary:
             slot_result = await self._handle_slot_selection(user_message)
             if slot_result:
                 return slot_result
+        # 代名詞解決（「それを変更して」→「会議を変更して」等）
+        user_message = await self._resolve_pronouns(user_message)
 
         # キーワードベースの事前分類（LLMの誤分類を防止）
         pre_intent = self._pre_classify_intent(user_message)
         if pre_intent:
-            intent = pre_intent
-            logger.info(f"インテント（事前分類）: {intent}")
+            intents = [pre_intent]
+            logger.info(f"インテント（事前分類）: {pre_intent}")
         else:
-            intent = await self._classify_intent(user_message)
-            logger.info(f"インテント: {intent}")
+            intents = await self._classify_intent(user_message)
+            logger.info(f"インテント: {','.join(intents)}")
 
-        memory_service.save_message(role="user", content=user_message, intent=intent)
+        memory_service.save_message(role="user", content=user_message, intent=intents[0])
 
         # インテントに応じたルーティング
         handler_map = {
@@ -68,6 +70,7 @@ class Secretary:
             "task_list": lambda: self._handle_task_list(user_message),
             "task_done": lambda: self._handle_task_done(user_message),
             "task_delete": lambda: self._handle_task_delete(user_message),
+            "task_edit": lambda: self._handle_task_edit(user_message),
             "task_priority": lambda: self._handle_task_priority(user_message),
             "briefing": lambda: self._handle_briefing(),
             "preference": lambda: self._handle_preference(user_message),
@@ -80,18 +83,85 @@ class Secretary:
             "help": lambda: self._handle_help(),
         }
 
-        handler = handler_map.get(intent)
-        if handler:
-            response = await handler()
-        else:
-            response = await self._handle_general(user_message, intent)
+        # 複数インテントを順次処理
+        responses = []
+        for intent in intents:
+            handler = handler_map.get(intent)
+            if handler:
+                response = await handler()
+            else:
+                response = await self._handle_general(user_message, intent)
+            responses.append(response)
 
-        memory_service.save_message(role="assistant", content=response)
+            # pending_actionが発生したら以降のインテントは処理しない（聞き返し中）
+            if self._pending_action or self._pending_slots:
+                break
+
+        combined = "\n\n---\n\n".join(responses) if len(responses) > 1 else responses[0]
+        memory_service.save_message(role="assistant", content=combined)
 
         # 行動ログ記録
-        preference_service.log_interaction(intent, {"message_length": len(user_message)})
+        preference_service.log_interaction(intents[0], {"message_length": len(user_message)})
 
-        return response
+        return combined
+
+    # 代名詞パターン
+    _PRONOUN_PATTERNS = [
+        "それ", "これ", "あれ", "この前の", "さっきの", "あの",
+        "その", "こっち", "そっち", "同じ", "上の", "前の",
+    ]
+
+    async def _resolve_pronouns(self, user_message: str) -> str:
+        """代名詞（「それ」「さっきの」等）を直前の会話から解決"""
+        msg = user_message.strip()
+
+        # 短すぎるメッセージ（確認応答等）はスキップ
+        if len(msg) <= 3:
+            return user_message
+
+        # 代名詞が含まれていなければスキップ
+        if not any(p in msg for p in self._PRONOUN_PATTERNS):
+            return user_message
+
+        # 会話履歴を取得
+        context = memory_service.format_context_for_prompt()
+        if not context:
+            logger.info("代名詞解決: 会話履歴なし、スキップ")
+            return user_message
+
+        logger.info(f"代名詞解決を試行: '{msg}'")
+
+        resolve_prompt = f"""あなたは代名詞を解決するアシスタントです。
+
+{context}
+
+【最新メッセージ】
+{msg}
+
+【タスク】
+上の最新メッセージ中の「それ」「これ」「あれ」「その」「さっきの」などの代名詞を、会話履歴から特定して具体的な名詞に置き換えた文を1行で返してください。
+
+【例】
+会話: 凛「明日14:00に田中さん面談を登録しました」→ ユーザー「それを15時に変更して」→ 出力: 「田中さん面談を15時に変更して」
+会話: 凛「タスク一覧: 1.報告書作成」→ ユーザー「その期限を金曜にして」→ 出力: 「報告書作成の期限を金曜にして」
+
+置き換えた文のみ返してください。説明は不要です。"""
+
+        try:
+            resolved = await llm_service.generate(prompt=resolve_prompt, temperature=0.1)
+            resolved = resolved.strip().strip("「」『』\"'")
+            # LLMが余計な説明を付けた場合、最初の1行だけ取る
+            if "\n" in resolved:
+                resolved = resolved.split("\n")[0].strip()
+            if resolved and len(resolved) > 2 and resolved != msg:
+                logger.info(f"代名詞解決成功: '{msg}' → '{resolved}'")
+                return resolved
+            else:
+                logger.info(f"代名詞解決: 変化なし（LLM出力: '{resolved}'）")
+        except Exception as e:
+            logger.warning(f"代名詞解決失敗: {e}")
+
+        return user_message
 
     def _pre_classify_intent(self, user_message: str) -> str | None:
         """キーワードベースの事前分類（LLM誤分類を防止）"""
@@ -120,24 +190,33 @@ class Secretary:
 
         return None
 
-    async def _classify_intent(self, user_message: str) -> str:
-        """LLMでインテント分類"""
+    async def _classify_intent(self, user_message: str) -> list[str]:
+        """LLMでインテント分類（複数インテント対応）"""
         prompt = INTENT_CLASSIFICATION_PROMPT.format(user_message=user_message)
         raw_intent = await llm_service.generate(prompt=prompt, temperature=0.1)
 
-        intent = raw_intent.strip().lower()
+        raw = raw_intent.strip().lower()
 
-        # 完全一致を優先
-        if intent in VALID_INTENTS:
-            return intent
+        # カンマ区切りで複数インテントが返される場合に対応
+        candidates = [s.strip() for s in raw.split(",")]
+        intents = []
+        for candidate in candidates:
+            # 完全一致を優先
+            if candidate in VALID_INTENTS:
+                intents.append(candidate)
+                continue
+            # 部分一致フォールバック
+            matched = False
+            for valid in sorted(VALID_INTENTS, key=len, reverse=True):
+                if valid in candidate:
+                    intents.append(valid)
+                    matched = True
+                    break
+            if not matched and len(candidates) == 1:
+                logger.warning(f"不明なインテント: {raw_intent} → generalにフォールバック")
+                intents.append("general")
 
-        # 部分一致フォールバック（長い名前を先にチェック）
-        for valid in sorted(VALID_INTENTS, key=len, reverse=True):
-            if valid in intent:
-                return valid
-
-        logger.warning(f"不明なインテント: {raw_intent} → generalにフォールバック")
-        return "general"
+        return intents if intents else ["general"]
 
     # --- カレンダー ---
 
@@ -255,6 +334,26 @@ class Secretary:
         if not parsed:
             return "予定の内容を読み取れませんでした。もう少し詳しく教えていただけますか？\n例：「明日14時から1時間、田中さんと面談」"
 
+        # 時刻不明 → 聞き返し
+        if parsed.get("time_missing"):
+            title = parsed.get("title", "無題")
+            date_str = parsed.get("date", "")
+            try:
+                date_dt = datetime.fromisoformat(date_str)
+                weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
+                wd = weekday_names[date_dt.weekday()]
+                date_label = f"{date_dt.month}/{date_dt.day}({wd})"
+            except (ValueError, TypeError):
+                date_label = date_str
+            self._pending_action = {
+                "type": "schedule_time_ask",
+                "title": title,
+                "date": date_str,
+                "duration_minutes": parsed.get("duration_minutes", 60),
+                "rrule": parsed.get("rrule"),
+            }
+            return f"「{title}」を{date_label}に登録しますね。\n何時からの予定ですか？（例：「14時」「10:30」）"
+
         title = parsed.get("title", "無題")
         start = parsed.get("start_datetime")
         end = parsed.get("end_datetime")
@@ -272,6 +371,10 @@ class Secretary:
 
         if result.get("conflict"):
             conflict_info = result["conflict"]
+            self._pending_action = {
+                "type": "schedule_conflict_confirm",
+                "event_body": result.get("event"),
+            }
             return f"⚠️ 時間が重複しています：{conflict_info}\n\nそれでも登録しますか？「はい」とお返事いただければ強制登録します。"
 
         repeat_note = f"（{rrule} で繰り返し）" if rrule else ""
@@ -758,6 +861,95 @@ JSONのみ返してください。
 
         return "該当するタスクが見つかりませんでした。「タスク一覧」で確認してから「〇〇を削除して」と指定してください。"
 
+    async def _handle_task_edit(self, user_message: str) -> str:
+        """タスクのタイトル・期限・優先度を変更する"""
+        from app.services.datetime_parser import _resolve_date
+
+        # LLMで変更情報を抽出
+        extract_prompt = f"""ユーザーのメッセージからタスクの変更情報を抽出してJSON形式で返してください。
+
+- task_number: タスク番号（「タスク1」「タスク3」等の数字。不明ならnull）
+- task_keyword: 対象タスクのキーワード（「報告書作成」等。番号がある場合はnull）
+- new_title: 変更後のタイトル（変更なしならnull）
+- new_due_date_raw: 変更後の期限表現（「明日」「金曜」「3/28」等。変更なしならnull）
+- new_priority: 変更後の優先度（1〜5の数字。変更なしならnull）
+
+JSONのみ返してください。
+メッセージ：{user_message}"""
+
+        if await llm_service._is_ollama_available():
+            raw = await llm_service.generate(prompt=extract_prompt, temperature=0.1)
+        else:
+            filtered = pii_filter.redact(extract_prompt)
+            raw = await llm_service.generate(prompt=filtered, temperature=0.1)
+            raw = pii_filter.restore(raw)
+
+        try:
+            clean = raw.strip()
+            if "```" in clean:
+                clean = clean.split("```")[1]
+                if clean.startswith("json"):
+                    clean = clean[4:]
+            parsed = json.loads(clean.strip())
+        except (json.JSONDecodeError, IndexError):
+            return "変更内容を読み取れませんでした。\n例：「タスク1の期限を金曜に変更」「報告書作成を進捗報告書に変更」"
+
+        task_number = parsed.get("task_number")
+        task_keyword = parsed.get("task_keyword", "")
+        new_title = parsed.get("new_title")
+        new_due_raw = parsed.get("new_due_date_raw")
+        new_priority = parsed.get("new_priority")
+
+        # 対象タスクを特定
+        target_task = None
+        tasks = task_service.get_pending_tasks()
+
+        if task_number is not None:
+            idx = int(task_number) - 1
+            if 0 <= idx < len(tasks):
+                target_task = tasks[idx]
+            else:
+                return f"タスク{task_number}は存在しません。「タスク一覧」で番号を確認してください。"
+        elif task_keyword:
+            matches = task_service.find_task_by_keyword(task_keyword)
+            if len(matches) == 1:
+                target_task = matches[0]
+            elif len(matches) > 1:
+                lines = [f"「{task_keyword}」に一致するタスクが{len(matches)}件あります。\n"]
+                for i, t in enumerate(matches[:5], 1):
+                    due = f"（期限: {t.due_date.strftime('%m/%d')}）" if t.due_date else ""
+                    lines.append(f"  {i}. {t.title}{due}")
+                lines.append("\n「タスク一覧」で番号を確認してから「タスクXの期限を〇〇に変更」のように指定してください。")
+                return "\n".join(lines)
+
+        if not target_task:
+            return "変更対象のタスクが見つかりませんでした。\n「タスク一覧」で番号を確認してから「タスク1の期限を金曜に変更」のように指定してください。"
+
+        # 変更内容を組み立て
+        new_due_date = _resolve_date(new_due_raw) if new_due_raw else None
+        if not new_title and not new_due_date and new_priority is None:
+            return "変更内容が指定されていません。\n例：「タスク1の期限を金曜に変更」「タスク1を「進捗報告書」に変更」"
+
+        updated = task_service.update_task(
+            task_id=target_task.id,
+            new_title=new_title,
+            new_due_date=new_due_date,
+            new_priority=new_priority,
+        )
+
+        if not updated:
+            return "申し訳ございません、タスクの更新に失敗しました。"
+
+        changes = []
+        if new_title:
+            changes.append(f"📝 タイトル: {new_title}")
+        if new_due_date:
+            changes.append(f"📅 期限: {new_due_date.strftime('%m/%d')}")
+        if new_priority is not None:
+            changes.append(f"⚡ 優先度: {new_priority}")
+
+        return f"✏️ タスクを変更しました。\n\n📋 {updated.title}\n" + "\n".join(changes)
+
     async def _handle_task_priority(self, user_message: str) -> str:
         """空き時間・予定・タスクを総合的に判断して提案"""
         tasks = task_service.get_pending_tasks()
@@ -1111,13 +1303,70 @@ JSONのみ返してください。
             return pii_filter.restore(result)
 
     async def _handle_confirmation(self, user_message: str) -> str | None:
-        """メール下書き/送信/予定変更・削除の確認応答を処理"""
+        """メール下書き/送信/予定変更・削除/時刻聞き返しの確認応答を処理"""
         action = self._pending_action
         if not action:
             return None
 
         msg_lower = user_message.strip().lower()
         msg_text = user_message.strip()
+
+        # 予定の重複確認: 強制登録
+        if action["type"] == "schedule_conflict_confirm":
+            if msg_lower in ("はい", "ok", "yes", "登録", "登録して"):
+                self._pending_action = None
+                event_body = action.get("event_body")
+                if not event_body:
+                    return "予定の情報が失われました。もう一度予定を教えてください。"
+                result = await calendar_service.force_create_event(event_body)
+                if result is None:
+                    return "申し訳ございません、カレンダーへの登録に失敗しました。"
+                title = result.get("title", "無題")
+                return f"✅ 予定を登録しました（重複あり）\n\n📅 {title}\n⏰ {result.get('start', '')}"
+            if msg_lower in ("キャンセル", "やめる", "やめて", "いいえ", "cancel"):
+                self._pending_action = None
+                return "予定の登録をキャンセルしました。"
+            self._pending_action = None
+            return None
+
+        # 予定登録: 時刻の聞き返しへの応答
+        if action["type"] == "schedule_time_ask":
+            from app.services.datetime_parser import _resolve_time
+            time_result = _resolve_time(msg_text)
+            if time_result:
+                self._pending_action = None
+                hour, minute = time_result
+                try:
+                    date_dt = datetime.fromisoformat(action["date"])
+                    start_dt = date_dt.replace(hour=hour, minute=minute)
+                except (ValueError, TypeError):
+                    return "日付の情報に問題がありました。最初から予定を教えていただけますか？"
+                duration = action.get("duration_minutes", 60)
+                end_dt = start_dt + timedelta(minutes=duration)
+                rrule = action.get("rrule")
+                title = action.get("title", "無題")
+
+                result = await calendar_service.create_event(
+                    title=title,
+                    start_datetime=start_dt,
+                    end_datetime=end_dt,
+                    rrule=rrule,
+                )
+                if result is None:
+                    return "申し訳ございません、カレンダーへの登録に失敗しました。"
+                if result.get("conflict"):
+                    conflict_info = result["conflict"]
+                    self._pending_action = {
+                        "type": "schedule_conflict_confirm",
+                        "event_body": result.get("event"),
+                    }
+                    return f"⚠️ 時間が重複しています：{conflict_info}\n\nそれでも登録しますか？「はい」とお返事いただければ強制登録します。"
+                repeat_note = f"（{rrule} で繰り返し）" if rrule else ""
+                return f"✅ 予定を登録しました{repeat_note}\n\n📅 {title}\n⏰ {result.get('start', start_dt.isoformat())}"
+            if msg_lower in ("キャンセル", "やめる", "やめて", "cancel"):
+                self._pending_action = None
+                return "予定の登録をキャンセルしました。"
+            return "時刻を読み取れませんでした。\n何時からの予定ですか？（例：「14時」「10:30」「午後3時」）"
 
         # 予定変更: 候補選択
         if action["type"] == "schedule_update":

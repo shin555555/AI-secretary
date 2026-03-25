@@ -22,6 +22,7 @@ def _setup_scheduler() -> None:
         deadline_reminder,
         generate_recurring_tasks,
         morning_briefing,
+        schedule_reminder,
     )
 
     # 朝ブリーフィング（平日のみ）
@@ -52,8 +53,17 @@ def _setup_scheduler() -> None:
         id="deadline_reminder",
     )
 
+    # 予定リマインド（10分間隔、平日のみ）
+    scheduler.add_job(
+        schedule_reminder,
+        "cron",
+        day_of_week="mon-fri",
+        minute="*/10",
+        id="schedule_reminder",
+    )
+
     scheduler.start()
-    logger.info("APScheduler起動完了（ブリーフィング/タスク生成/リマインド）")
+    logger.info("スケジューラ起動完了（ブリーフィング/タスク生成/期限リマインド/予定リマインド）")
 
 
 @asynccontextmanager

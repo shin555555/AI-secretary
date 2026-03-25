@@ -128,6 +128,42 @@ class TaskService:
             deleted = Task(id=task_id, title=title)
             return deleted
 
+    def update_task(
+        self,
+        task_id: int,
+        new_title: str | None = None,
+        new_due_date: datetime | None = None,
+        new_priority: int | None = None,
+        clear_due_date: bool = False,
+    ) -> Task | None:
+        """タスクを更新（タイトル・期限・優先度の部分更新）"""
+        with SessionLocal() as session:
+            task = session.get(Task, task_id)
+            if not task:
+                return None
+            if new_title:
+                task.title = new_title
+            if new_due_date:
+                task.due_date = new_due_date
+            elif clear_due_date:
+                task.due_date = None
+            if new_priority is not None:
+                task.priority = new_priority
+            session.commit()
+            session.refresh(task)
+            logger.info(f"タスク更新: {task.title} (id={task_id})")
+            return task
+
+    def find_task_by_keyword(self, keyword: str) -> list[Task]:
+        """キーワードでタスクを検索（未完了のみ）"""
+        with SessionLocal() as session:
+            stmt = (
+                select(Task)
+                .where(Task.status != "done", Task.title.contains(keyword))
+                .order_by(Task.priority, Task.due_date.nulls_last())
+            )
+            return list(session.execute(stmt).scalars().all())
+
     def delete_task_by_title(self, title_keyword: str) -> Task | None:
         """タイトルの部分一致でタスクを削除"""
         with SessionLocal() as session:
