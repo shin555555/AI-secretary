@@ -1,6 +1,6 @@
 # 実装進捗
 
-最終更新: 2026-03-25（doc-sync）
+最終更新: 2026-03-26（Phase 11 🟡 High テスト完了）
 
 ## フェーズ一覧
 
@@ -185,9 +185,9 @@
 - [ ] `tests/test_pii_filter.py` — redact/restore の正常ケース・誤検知ケースのユニットテスト
 
 #### 🟡 High
-- [ ] `tests/test_datetime_parser.py` — 「再来週の水曜」「3日後」「今週末」「一昨日」等の全パターンテスト
-- [ ] `tests/test_task_service.py` — CRUD・期限計算・完了タスク集計のテスト
-- [ ] `tests/test_intent_classifier.py` — 代表的な日本語メッセージの分類精度テスト（モック使用）
+- [x] `tests/test_datetime_parser.py` — 「再来週の水曜」「3日後」「今週末」「一昨日」等の全パターンテスト（2026-03-26 完了）
+- [x] `tests/test_task_service.py` — CRUD・期限計算・完了タスク集計のテスト（2026-03-26 完了）
+- [x] `tests/test_intent_classifier.py` — 代表的な日本語メッセージの分類精度テスト（モック使用）（2026-03-26 完了）
 
 #### 🟢 Medium
 - [ ] `tests/test_summary_report.py` — カテゴリ別集計ロジックのユニットテスト
@@ -303,3 +303,11 @@ _（開発中に発生した問題・決定事項をここに記録）_
 - **ブリーフィング耐障害性**: morning_briefing() に3回リトライ（30秒/60秒待機）+ 全失敗時ユーザー通知Push
 - **Geminiレート制限**: _generate_gemini() に指数バックオフ（2/4/8秒）3回リトライ実装
 - **PIIフィルタ強化**: クレジットカード（16桁）・マイナンバー（12桁）・銀行口座番号パターン追加、長いパターン優先でマッチ順序修正
+
+### 2026-03-26（Phase 11 🟡 High テスト実装完了）
+- **test_datetime_parser.py**: 57テスト — 日付解析全パターン（相対表現/絶対日付/曜日/時刻/業務時間推定等）
+- **test_task_service.py**: 35テスト — CRUD・期限計算・完了集計・繰り返しタスク生成・表示フォーマット
+- **test_intent_classifier.py**: 39テスト — キーワード事前分類・LLMパース・複数インテント・エッジケース
+- **conftest.py**: テスト共通フィクスチャ（インメモリSQLite + DB依存排除）
+- 全131テスト合格（0.85秒、Pytest自動実行モード）
+- GitHub push完了（commit 47e990b）
