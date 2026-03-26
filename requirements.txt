@@ -29,4 +29,5 @@ cryptography==44.*
 # Dev / Test
 pytest==8.*
 pytest-asyncio==0.25.*
+pytest-cov==7.*
 ruff==0.11.*

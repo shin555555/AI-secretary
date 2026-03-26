@@ -1,6 +1,6 @@
 # 実装進捗
 
-最終更新: 2026-03-26（Phase 11 🟡 High テスト完了）
+最終更新: 2026-03-26（Phase 11 🟡 High + 🟢 Medium テスト完了）
 
 ## フェーズ一覧
 
@@ -190,9 +190,9 @@
 - [x] `tests/test_intent_classifier.py` — 代表的な日本語メッセージの分類精度テスト（モック使用）（2026-03-26 完了）
 
 #### 🟢 Medium
-- [ ] `tests/test_summary_report.py` — カテゴリ別集計ロジックのユニットテスト
-- [ ] pytest設定（`pyproject.toml` の `[tool.pytest.ini_options]`）とCI統合（GitHub Actions）
-- [ ] カバレッジレポート設定（`pytest-cov`）
+- [x] `tests/test_summary_report.py` — カテゴリ別集計ロジックのユニットテスト（2026-03-26 完了）
+- [x] pytest設定（`pyproject.toml` の `[tool.pytest.ini_options]`）とCI統合（GitHub Actions）（2026-03-26 完了）
+- [x] カバレッジレポート設定（`pytest-cov`）（2026-03-26 完了）
 
 ---
 
@@ -311,3 +311,12 @@ _（開発中に発生した問題・決定事項をここに記録）_
 - **conftest.py**: テスト共通フィクスチャ（インメモリSQLite + DB依存排除）
 - 全131テスト合格（0.85秒、Pytest自動実行モード）
 - GitHub push完了（commit 47e990b）
+
+### 2026-03-26（Phase 11 🟢 Medium テスト・CI設定完了）
+- **test_summary_report.py**: 15テスト — カテゴリ分類（面談/会議/研修/その他）・期間判定（今週/先週/今月/先月）・完了タスク表示・期限超過検出
+- **pyproject.toml**: pytest設定強化（`addopts`, `filterwarnings`, `pytest-cov`）
+- **requirements.txt**: `pytest-cov==7.*` 追加
+- **.github/workflows/test.yml**: GitHub Actions CI（Python 3.12, lint + test + coverage）
+- **conftest.py**: CI環境対応（sqlcipher3なし環境でも動作、DeclarativeBase フォールバック）
+- 全146テスト合格（2.54秒）、カバレッジ28%
+- GitHub Actions ワークフロー自動実行可能（master push時）

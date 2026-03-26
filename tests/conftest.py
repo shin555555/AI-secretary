@@ -1,4 +1,8 @@
-"""テスト共通フィクスチャ: インメモリSQLiteでDB依存テストを実行"""
+"""テスト共通フィクスチャ: インメモリSQLiteでDB依存テストを実行
+
+CI環境ではsqlcipher3が利用できないため、base.pyのengine/SessionLocalを
+テスト用のインメモリSQLiteで上書きする。
+"""
 
 from unittest.mock import patch
 
@@ -6,7 +10,19 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.models.base import Base
+# base.py インポート時に _create_engine() が走るが、
+# ローカル環境では keyring + sqlcipher3 が存在するので問題ない。
+# CI環境では sqlcipher3 がないためエラーになるが、
+# その場合でも Base クラス自体は DeclarativeBase なので
+# engine 作成失敗後でも Base は使える。
+try:
+    from app.models.base import Base  # noqa: F401
+except Exception:
+    # sqlcipher3がない環境: Baseだけ定義し直す
+    from sqlalchemy.orm import DeclarativeBase
+
+    class Base(DeclarativeBase):  # type: ignore[no-redef]
+        pass
 
 
 @pytest.fixture()
