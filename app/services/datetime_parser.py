@@ -12,12 +12,17 @@ DATETIME_PARSE_PROMPT = """\
 
 【重要】日付・時刻の計算は不要です。ユーザーが言った表現をそのまま返してください。
 - date_raw: 日付表現をそのまま（「明日」「金曜」「3/20」「23日」「3日後」「再来週の水曜」「今週末」「1週間後」等）
+  ※「明日」は「明日」、「金曜」は「金曜」とそのまま返す。日付を計算して具体的な日付に変換しないこと。
 - time_raw: 時刻表現をそのまま（「14時」「16:00」「午後3時」等。不明ならnull）
 - duration_minutes: 所要時間（分）。不明なら60
 
 【抽出ルール】
-- title: 予定のタイトル（人名や「打ち合わせ」「面談」等）
-- date_raw: ユーザーが言った日付表現（そのまま）
+- title: 予定のタイトル。日付・時刻・所要時間の表現を除いた残りの部分をすべて含める。
+  人名＋助詞（に・と・へ・から等）＋内容はすべてタイトルに含めること。
+  例: 「明日の17時に田中さんに面接結果報告」→ title: "田中さんに面接結果報告"
+  例: 「来週月曜に山本さんと打ち合わせ」→ title: "山本さんと打ち合わせ"
+  例: 「3日後に本社へ出張」→ title: "本社へ出張"
+- date_raw: ユーザーが言った日付表現（そのまま。計算・変換しない）
 - time_raw: ユーザーが言った時刻表現（そのまま。不明ならnull）
 - duration_minutes: 所要時間（分、不明なら60）
 - rrule: 繰り返しルール（繰り返しなければnull）
@@ -226,7 +231,12 @@ async def parse_schedule_from_message(user_message: str) -> dict | None:
         return None
 
     # コード側で日付・時刻を正確に計算
-    date = _resolve_date(parsed.get("date_raw"))
+    # LLMが date_raw を具体日付に変換してしまった場合、元メッセージから相対表現を直接抽出
+    date_raw = parsed.get("date_raw")
+    date = _resolve_date(date_raw)
+    if date is None and date_raw:
+        # LLMが「3/28」等に変換してしまった場合、元メッセージから再抽出
+        date = _resolve_date(user_message)
     time = _resolve_time(parsed.get("time_raw"))
     duration = parsed.get("duration_minutes", 60)
 

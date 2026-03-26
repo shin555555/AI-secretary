@@ -19,6 +19,18 @@ from app.services.task_service import task_service
 logger = logging.getLogger(__name__)
 
 
+def _match_event_date(event: dict, target_start: datetime, target_end: datetime) -> bool:
+    """イベントが指定日付範囲に含まれるか判定"""
+    try:
+        start_str = event.get("start", "")
+        start_dt = datetime.fromisoformat(start_str)
+        if start_dt.tzinfo is not None:
+            start_dt = start_dt.replace(tzinfo=None)
+        return target_start <= start_dt < target_end
+    except (ValueError, TypeError):
+        return False
+
+
 class Secretary:
     """凛のコアオーケストレータ: インテント分類 → サービスルーティング → 応答生成"""
 
@@ -565,17 +577,55 @@ JSONのみ返してください。
         if user_message.strip() in short_phrases:
             return "どの予定を削除しますか？\n（例：「明日の会議を削除して」「田中さん面談をキャンセル」）"
 
-        # LLMでキーワード抽出
-        extract_prompt = f"ユーザーのメッセージから、削除したい予定のキーワード（人名や会議名など）だけを抽出して単語で返してください。説明不要、キーワードのみ。\nメッセージ：{user_message}"
-        keyword = await llm_service.generate(prompt=extract_prompt, temperature=0.1)
-        keyword = keyword.strip().strip("「」『』\"'")
+        # LLMでキーワードと日付表現を抽出
+        extract_prompt = f"""ユーザーのメッセージから、削除したい予定の情報をJSON形式で返してください。
+- keyword: 予定のキーワード（人名や会議名など。日付表現は含めない。特定のキーワードがなければnull）
+- date_raw: 日付表現（「明日」「明後日」「来週月曜」等。そのまま返す。なければnull）
 
-        if not keyword:
-            return "どの予定を削除するか分かりませんでした。予定のタイトルや相手の名前を含めてください。"
+JSONのみ返してください。
+メッセージ：{user_message}"""
+        raw = await llm_service.generate(prompt=extract_prompt, temperature=0.1)
+        try:
+            clean = raw.strip()
+            if "```" in clean:
+                clean = clean.split("```")[1]
+                if clean.startswith("json"):
+                    clean = clean[4:]
+            delete_info = json.loads(clean.strip())
+        except (json.JSONDecodeError, IndexError):
+            delete_info = {"keyword": None, "date_raw": None}
 
-        events = await calendar_service.search_events(keyword)
+        keyword = delete_info.get("keyword")
+        if keyword:
+            keyword = str(keyword).strip().strip("「」『』\"'")
+            if keyword.lower() in ("null", "none", ""):
+                keyword = None
+        date_raw = delete_info.get("date_raw")
+
+        # 日付表現がある場合、日付で絞り込み
+        target_date = _resolve_date(date_raw) if date_raw else None
+        # LLMが date_raw を変換してしまった場合、元メッセージから再抽出
+        if target_date is None and date_raw:
+            target_date = _resolve_date(user_message)
+
+        events = []
+        if keyword:
+            events = await calendar_service.search_events(keyword)
+            # キーワード＋日付指定の場合、日付で絞り込み
+            if events and target_date:
+                target_end = target_date + timedelta(days=1)
+                events = [
+                    e for e in events
+                    if _match_event_date(e, target_date, target_end)
+                ]
+        if not events and target_date:
+            # 日付指定のみ、またはキーワード＋日付で絞り込み後0件の場合
+            target_end = target_date + timedelta(days=1)
+            events = await calendar_service._get_events_between(target_date, target_end)
+
         if not events:
-            return f"「{keyword}」に一致する予定が見つかりませんでした。"
+            msg = f"「{keyword}」に一致する予定が見つかりませんでした。" if keyword else "指定された日付の予定が見つかりませんでした。"
+            return msg
 
         # 未来の予定のみ
         now = datetime.now()
