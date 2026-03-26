@@ -152,7 +152,7 @@ class GmailService:
         return None
 
     async def get_message_body(self, message_id: str, max_chars: int = 500) -> str | None:
-        """メール本文を取得（冒頭のみ）"""
+        """メール本文を取得（冒頭のみ）+ 添付ファイル情報"""
         service = self._build_service()
         if not service:
             return None
@@ -164,9 +164,21 @@ class GmailService:
                 .get(userId="me", id=message_id, format="full")
                 .execute()
             )
-            body = self._extract_body(msg.get("payload", {}))
+            payload = msg.get("payload", {})
+            body = self._extract_body(payload)
             if body and len(body) > max_chars:
                 body = body[:max_chars] + "..."
+
+            # 添付ファイル情報を追加
+            attachments = self._extract_attachments(payload)
+            if attachments:
+                att_lines = ["\n\n📎 添付ファイル:"]
+                for att in attachments:
+                    size_kb = att["size"] // 1024
+                    size_str = f"{size_kb}KB" if size_kb > 0 else f"{att['size']}B"
+                    att_lines.append(f"  • {att['filename']}（{size_str}）")
+                body = (body or "") + "\n".join(att_lines)
+
             return body
         except HttpError as e:
             logger.error(f"メール本文取得エラー: {e}")
@@ -363,26 +375,71 @@ class GmailService:
         return False
 
     def _extract_body(self, payload: dict) -> str:
-        """メール本文をプレーンテキストで抽出"""
-        if payload.get("mimeType") == "text/plain":
+        """メール本文をプレーンテキストで抽出（HTML→テキスト変換対応）"""
+        # text/plain を優先検索
+        plain = self._find_part_by_mime(payload, "text/plain")
+        if plain:
+            return plain
+
+        # text/plain がなければ text/html からタグ除去
+        html = self._find_part_by_mime(payload, "text/html")
+        if html:
+            return self._html_to_text(html)
+
+        return ""
+
+    def _find_part_by_mime(self, payload: dict, mime_type: str) -> str:
+        """指定MIMEタイプのパートを再帰的に検索してデコード"""
+        if payload.get("mimeType") == mime_type:
             data = payload.get("body", {}).get("data", "")
             if data:
                 return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
 
-        parts = payload.get("parts", [])
-        for part in parts:
-            if part.get("mimeType") == "text/plain":
+        for part in payload.get("parts", []):
+            if part.get("mimeType") == mime_type:
                 data = part.get("body", {}).get("data", "")
                 if data:
                     return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-            # ネストされたパーツ
             if part.get("parts"):
-                result = self._extract_body(part)
+                result = self._find_part_by_mime(part, mime_type)
                 if result:
                     return result
-
-        # text/plain がなければ snippet を返す
         return ""
+
+    def _html_to_text(self, html: str) -> str:
+        """HTMLタグを除去してプレーンテキストに変換"""
+        # <br> <br/> <p> <div> → 改行
+        text = re.sub(r"<br\s*/?>|</p>|</div>|</tr>|</li>", "\n", html, flags=re.IGNORECASE)
+        # <style> <script> ブロックごと除去
+        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE)
+        # 残りのタグを除去
+        text = re.sub(r"<[^>]+>", "", text)
+        # HTMLエンティティ
+        text = text.replace("&nbsp;", " ").replace("&amp;", "&")
+        text = text.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"')
+        # 連続空行を整理
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
+
+    def _extract_attachments(self, payload: dict) -> list[dict]:
+        """添付ファイル情報を抽出（ダウンロードはしない）"""
+        attachments: list[dict] = []
+        self._collect_attachments(payload, attachments)
+        return attachments
+
+    def _collect_attachments(self, payload: dict, result: list[dict]) -> None:
+        """再帰的に添付ファイルを収集"""
+        filename = payload.get("filename", "")
+        body = payload.get("body", {})
+        if filename and body.get("attachmentId"):
+            result.append({
+                "filename": filename,
+                "mime_type": payload.get("mimeType", ""),
+                "size": body.get("size", 0),
+            })
+        for part in payload.get("parts", []):
+            self._collect_attachments(part, result)
 
     def format_mail_list(self, messages: list[dict], triage_results: list[dict] | None = None) -> str:
         """メール一覧を表示用テキストに変換"""

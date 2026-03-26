@@ -59,6 +59,32 @@ class TestAddAndGetTasks:
         assert priorities == sorted(priorities)
 
 
+# ===== start_task =====
+
+
+class TestStartTask:
+    def test_start_by_id(self, svc):
+        task = svc.add_task("着手テスト")
+        result = svc.start_task(task.id)
+        assert result is not None
+        assert result.status == "in_progress"
+
+    def test_start_nonexistent_returns_none(self, svc):
+        assert svc.start_task(9999) is None
+
+    def test_start_then_complete(self, svc):
+        task = svc.add_task("二段階テスト")
+        svc.start_task(task.id)
+        completed = svc.complete_task(task.id)
+        assert completed.status == "done"
+
+    def test_in_progress_shown_in_pending(self, svc):
+        task = svc.add_task("作業中タスク")
+        svc.start_task(task.id)
+        pending = svc.get_pending_tasks()
+        assert any(t.status == "in_progress" for t in pending)
+
+
 # ===== complete_task =====
 
 
@@ -313,6 +339,14 @@ class TestFormatDisplay:
         assert "タスクA" in result
         assert "04/01" in result
         assert "🔴" in result  # priority 1
+
+    def test_in_progress_badge(self, svc):
+        task = svc.add_task("作業中タスク")
+        svc.start_task(task.id)
+        tasks = svc.get_pending_tasks()
+        result = svc.format_tasks_for_display(tasks)
+        assert "🔧" in result
+        assert "作業中タスク" in result
 
     def test_format_recurring_empty(self, svc):
         result = svc.format_recurring_for_display([])

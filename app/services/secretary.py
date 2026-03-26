@@ -819,27 +819,45 @@ JSONのみ返してください。
         return task_service.format_tasks_for_display(tasks)
 
     async def _handle_task_done(self, user_message: str) -> str:
-        """タスクを完了にする"""
-        # 「タスク1完了」のようなパターン
+        """タスクを完了 or 作業中にする"""
+        is_start = any(k in user_message for k in ["着手", "開始", "作業中", "取りかかる", "始める"])
+
+        # 「タスク1完了」「タスク1着手」のようなパターン
         match = re.search(r"タスク\s*(\d+)", user_message)
         if match:
             task_id = int(match.group(1))
-            # IDではなく表示番号（1始まり）なので、一覧から取得
             tasks = task_service.get_pending_tasks()
             idx = task_id - 1
             if 0 <= idx < len(tasks):
-                completed = task_service.complete_task(tasks[idx].id)
+                if is_start:
+                    started = task_service.start_task(tasks[idx].id)
+                    if started:
+                        return f"🔧 「{started.title}」に着手しました。頑張ってください！"
+                else:
+                    completed = task_service.complete_task(tasks[idx].id)
+                    if completed:
+                        return f"✅ 「{completed.title}」を完了にしました。お疲れさまです！"
+
+        # タイトルキーワードで検索
+        keyword = (
+            user_message
+            .replace("完了", "").replace("着手", "").replace("開始", "")
+            .replace("作業中", "").replace("始める", "").replace("取りかかる", "")
+            .replace("タスク", "").strip()
+        )
+        if keyword:
+            if is_start:
+                found = task_service.find_task_by_keyword(keyword)
+                if found:
+                    started = task_service.start_task(found[0].id)
+                    if started:
+                        return f"🔧 「{started.title}」に着手しました。頑張ってください！"
+            else:
+                completed = task_service.complete_task_by_title(keyword)
                 if completed:
                     return f"✅ 「{completed.title}」を完了にしました。お疲れさまです！"
 
-        # タイトルキーワードで検索
-        keyword = user_message.replace("完了", "").replace("タスク", "").strip()
-        if keyword:
-            completed = task_service.complete_task_by_title(keyword)
-            if completed:
-                return f"✅ 「{completed.title}」を完了にしました。お疲れさまです！"
-
-        return "該当するタスクが見つかりませんでした。「タスク一覧」で番号を確認してから「タスク1完了」のように指定してください。"
+        return "該当するタスクが見つかりませんでした。「タスク一覧」で番号を確認してから「タスク1完了」または「タスク1着手」のように指定してください。"
 
     async def _handle_task_delete(self, user_message: str) -> str:
         """タスクを削除する"""

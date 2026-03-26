@@ -97,6 +97,18 @@ class TaskService:
             )
             return list(session.execute(stmt).scalars().all())
 
+    def start_task(self, task_id: int) -> Task | None:
+        """タスクを作業中にする"""
+        with SessionLocal() as session:
+            task = session.get(Task, task_id)
+            if not task:
+                return None
+            task.status = "in_progress"
+            session.commit()
+            session.refresh(task)
+            logger.info(f"タスク着手: {task.title} (id={task_id})")
+            return task
+
     def complete_task(self, task_id: int) -> Task | None:
         """タスクを完了にする"""
         with SessionLocal() as session:
@@ -309,12 +321,13 @@ class TaskService:
 
         for i, task in enumerate(tasks, 1):
             emoji = priority_emoji.get(task.priority, "🟡")
+            status_badge = "🔧" if task.status == "in_progress" else ""
             due = ""
             if task.due_date:
                 due = f"（期限: {task.due_date.strftime('%m/%d')}）"
-            lines.append(f"{emoji} {i}. {task.title}{due}")
+            lines.append(f"{emoji} {i}. {status_badge}{task.title}{due}")
 
-        lines.append("\n完了にするには「タスク1完了」のように送信してください。")
+        lines.append("\n「タスク1完了」で完了、「タスク1着手」で作業中にできます。")
         return "\n".join(lines)
 
     def format_recurring_for_display(self, recurring: list[RecurringTask]) -> str:
