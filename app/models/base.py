@@ -1,6 +1,8 @@
 import logging
+import os
 import secrets
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import quote as urlquote
 
 import keyring
@@ -11,20 +13,55 @@ logger = logging.getLogger(__name__)
 
 # DB パス
 DB_PATH = "data/secretary.db"
+DB_KEY_BACKUP_PATH = Path("data/db_key_backup.bin")
 
 KEYRING_SERVICE = "ai-secretary"
 KEYRING_KEY_NAME = "db_encryption_key"
 
 
+def _save_key_backup(key: str) -> None:
+    """暗号化キーをバックアップファイルに保存"""
+    try:
+        DB_KEY_BACKUP_PATH.parent.mkdir(parents=True, exist_ok=True)
+        DB_KEY_BACKUP_PATH.write_text(key, encoding="utf-8")
+        logger.info("DB encryption key backed up to %s", DB_KEY_BACKUP_PATH)
+    except OSError as e:
+        logger.warning("キーのバックアップ保存に失敗: %s", e)
+
+
+def _load_key_backup() -> str | None:
+    """バックアップファイルから暗号化キーを復元"""
+    try:
+        if DB_KEY_BACKUP_PATH.exists():
+            key = DB_KEY_BACKUP_PATH.read_text(encoding="utf-8").strip()
+            if key:
+                return key
+    except OSError as e:
+        logger.warning("キーのバックアップ読み込みに失敗: %s", e)
+    return None
+
+
 def _get_or_create_db_key() -> str:
-    """keyringから暗号化キーを取得。なければ生成して保存"""
+    """keyringから暗号化キーを取得。なければバックアップ→新規生成の順で試行"""
+    # 1. OS keyring から取得
     key = keyring.get_password(KEYRING_SERVICE, KEYRING_KEY_NAME)
     if key:
+        # keyring にあればバックアップも最新化
+        _save_key_backup(key)
         return key
 
+    # 2. バックアップファイルから復元
+    key = _load_key_backup()
+    if key:
+        keyring.set_password(KEYRING_SERVICE, KEYRING_KEY_NAME, key)
+        logger.info("DB encryption key restored from backup to OS keyring")
+        return key
+
+    # 3. 新規生成
     key = secrets.token_hex(32)
     keyring.set_password(KEYRING_SERVICE, KEYRING_KEY_NAME, key)
-    logger.info("DB encryption key generated and stored in OS keyring")
+    _save_key_backup(key)
+    logger.info("DB encryption key generated and stored in OS keyring + backup")
     return key
 
 

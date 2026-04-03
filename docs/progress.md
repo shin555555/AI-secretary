@@ -286,6 +286,13 @@
 
 _（開発中に発生した問題・決定事項をここに記録）_
 
+### 2026-04-03（会社移転後の障害復旧）
+- **障害原因**: Windows資格情報マネージャーに保存されていたSQLCipher暗号化キーが消失（移転時のPC再設定が原因と推定）。サーバーが `file is not a database` エラーで起動不可に。
+- **復旧**: `data/secretary.db` を削除してDB新規作成。タスク・設定・会話履歴・メールフィルタルールが消失（Googleカレンダー/Gmailは無影響）。
+- **再発防止**: `app/models/base.py` に暗号化キーのバックアップ機構を実装。keyring消失時に `data/db_key_backup.bin` から自動復元（keyring → バックアップ → 新規生成の優先順位）。
+- **タスクスケジューラ復旧**: 移転に伴い3タスクが消失 → `scripts/setup_scheduler.ps1` を管理者PowerShellで再実行して復旧（WakeAndStart/OnLogon/SleepAt0）。
+- **Google OAuth再認証**: トークン失効のため `data/google_token.json` 削除 → `scripts/setup_google_oauth.py` で再認証。Google Cloud ConsoleでOAuthアプリを本番公開済み（7日制限解除）。
+
 ### 2026-03-26（バグ修正・カレンダー機能改善）
 - **Google OAuthトークン失効**: `invalid_grant` エラーにより12:00以降カレンダー・Gmail全機能停止 → Google Cloud Console でアプリを本番公開（7日制限解除）、`data/google_token.json` 削除→再認証で復旧
 - **予定タイトル省略バグ修正**: `datetime_parser.py` のLLMプロンプトを改善 — 「田中さんに面接結果報告」→「面接結果報告」と人名＋助詞が欠落する問題を解消（具体例3件追加、「助詞を含めすべて残す」と明記）
